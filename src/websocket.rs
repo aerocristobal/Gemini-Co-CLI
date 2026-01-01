@@ -140,7 +140,7 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
     };
 
     // Spawn Gemini CLI process with PTY
-    let mut gemini = match GeminiTerminal::spawn() {
+    let gemini = match GeminiTerminal::spawn() {
         Ok(g) => g,
         Err(e) => {
             tracing::error!("Failed to spawn Gemini CLI: {}", e);
@@ -148,12 +148,17 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
+    // Keep gemini instance for resize operations
+    let gemini_arc = Arc::new(Mutex::new(gemini));
+
     let (ws_sender, mut ws_receiver) = socket.split();
     let ws_sender = Arc::new(Mutex::new(ws_sender));
 
     // Get PTY reader and writer
-    let mut reader = gemini.get_reader();
-    let mut writer = gemini.take_writer();
+    let gemini_for_io = gemini_arc.lock().await;
+    let mut reader = gemini_for_io.get_reader();
+    let mut writer = gemini_for_io.take_writer();
+    drop(gemini_for_io); // Release lock
 
     // Channel for command requests from Gemini
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
@@ -164,10 +169,13 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         let mut buffer = vec![0u8; 4096];
         let mut line_buffer = String::new();
 
+        tracing::info!("Gemini PTY output task started");
+
         loop {
             match reader.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    tracing::debug!("Gemini PTY output: {} bytes", n);
 
                     // Accumulate output for command detection
                     line_buffer.push_str(&output);
@@ -194,21 +202,29 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                         let mut s = sender.lock().await;
                         s.send(Message::Text(json)).await
                     }).is_err() {
+                        tracing::warn!("WebSocket closed, stopping Gemini PTY output");
                         break;
                     }
                 }
-                Ok(_) => break, // EOF
+                Ok(_) => {
+                    tracing::warn!("Gemini PTY reached EOF - process may have exited");
+                    break;
+                }
                 Err(e) => {
-                    tracing::error!("Error reading from PTY: {}", e);
+                    tracing::error!("Error reading from Gemini PTY: {}", e);
                     break;
                 }
             }
         }
+        tracing::info!("Gemini PTY output task ended");
     });
 
     // Task to handle WebSocket input and send to PTY
+    let gemini_for_resize = gemini_arc.clone();
     let mut input_task = tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
+
+        tracing::info!("Gemini PTY input task started");
 
         loop {
             // Receive from WebSocket in async context
@@ -221,28 +237,43 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                     if let Ok(terminal_msg) = serde_json::from_str::<TerminalMessage>(&text) {
                         match terminal_msg {
                             TerminalMessage::Input { data } => {
+                                tracing::debug!("Gemini PTY input: {} bytes", data.len());
                                 if let Err(e) = writer.write_all(data.as_bytes()) {
-                                    tracing::error!("Error writing to PTY: {}", e);
+                                    tracing::error!("Error writing to Gemini PTY: {}", e);
                                     break;
                                 }
-                                let _ = writer.flush();
+                                if let Err(e) = writer.flush() {
+                                    tracing::error!("Error flushing Gemini PTY: {}", e);
+                                    break;
+                                }
                             }
                             TerminalMessage::Resize { width, height } => {
-                                // Handle resize if needed
-                                tracing::debug!("Resize request: {}x{}", width, height);
+                                tracing::info!("Gemini PTY resize: {}x{}", width, height);
+                                let gemini_resize = gemini_for_resize.clone();
+                                let resize_result = rt.block_on(async {
+                                    let gemini = gemini_resize.lock().await;
+                                    gemini.resize(width as u16, height as u16)
+                                });
+                                if let Err(e) = resize_result {
+                                    tracing::error!("Failed to resize Gemini PTY: {}", e);
+                                }
                             }
                             _ => {}
                         }
                     }
                 }
-                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(Message::Close(_))) | None => {
+                    tracing::info!("Gemini WebSocket closed");
+                    break;
+                }
                 Some(Err(e)) => {
-                    tracing::error!("WebSocket error: {}", e);
+                    tracing::error!("Gemini WebSocket error: {}", e);
                     break;
                 }
                 _ => {}
             }
         }
+        tracing::info!("Gemini PTY input task ended");
     });
 
     // Task to handle command approvals and execute on SSH terminal
@@ -349,8 +380,9 @@ async fn ssh_terminal_connection(socket: WebSocket, session_id: String, state: A
                         TerminalMessage::Input { data } => {
                             if let Some(ssh) = &ssh_session {
                                 let mut ssh_guard = ssh.lock().await;
-                                if let Err(e) = ssh_guard.execute_command(data).await {
-                                    tracing::error!("Error executing command: {}", e);
+                                // Send raw input for user keystrokes
+                                if let Err(e) = ssh_guard.send_input(data).await {
+                                    tracing::error!("Error sending input: {}", e);
                                 }
                             }
                         }

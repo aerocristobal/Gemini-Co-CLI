@@ -48,7 +48,7 @@ impl GeminiTerminal {
 
     /// Take writer for PTY input (can only be called once)
     pub fn take_writer(&self) -> Box<dyn Write + Send> {
-        let mut pty = self.pty_pair.blocking_lock();
+        let pty = self.pty_pair.blocking_lock();
         pty.master.take_writer().expect("Failed to take writer")
     }
 

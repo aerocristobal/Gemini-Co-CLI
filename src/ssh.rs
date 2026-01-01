@@ -97,6 +97,17 @@ impl SshSession {
         })
     }
 
+    /// Send raw input to the SSH terminal (for user keystrokes)
+    pub async fn send_input(&mut self, data: String) -> Result<()> {
+        let bytes = data.as_bytes();
+        self.channel
+            .data(bytes)
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send input"))?;
+        Ok(())
+    }
+
+    /// Execute a complete command (adds newline automatically)
     pub async fn execute_command(&mut self, command: String) -> Result<()> {
         let cmd_with_newline = format!("{}\n", command);
         let bytes = cmd_with_newline.as_bytes();
