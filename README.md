@@ -4,12 +4,13 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 
 ## Features
 
-- **Split-Pane Interface**: Google Gemini Canvas-inspired UI with:
-  - Left pane: Gemini Pro AI chat interface
+- **Dual Terminal Interface**: Google Gemini Canvas-inspired UI with:
+  - Left pane: Interactive Gemini CLI terminal
   - Right pane: Live SSH terminal connection
-- **AI-Powered Terminal Assistant**: Gemini can observe terminal outputs and provide contextual help
-- **Command Execution with Approval**: Gemini can suggest and execute terminal commands with user permission
-- **Real-time Communication**: WebSocket-based bidirectional communication between Gemini and the terminal
+- **Interactive Gemini Terminal**: Run Gemini CLI directly in the browser with full terminal capabilities
+- **AI-Powered Terminal Assistant**: Gemini observes SSH terminal outputs and provides contextual help
+- **Command Execution with Approval**: Gemini can suggest and execute SSH terminal commands with user permission
+- **Real-time Communication**: Three WebSocket connections for seamless interaction
 - **Containerized Deployment**: Easy deployment with Docker
 - **Secure SSH Connections**: Support for both password and SSH key authentication
 - **Official Gemini CLI**: Uses [@google/gemini-cli](https://github.com/google-gemini/gemini-cli) with Google OAuth
@@ -17,28 +18,29 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│           Web Browser UI                 │
-│  ┌──────────────┬───────────────────┐   │
-│  │   Gemini     │     Terminal      │   │
-│  │   Chat       │     (xterm.js)    │   │
-│  └──────────────┴───────────────────┘   │
-└─────────────┬──────────────┬────────────┘
-              │              │
-         WebSocket      WebSocket
-              │              │
-┌─────────────┴──────────────┴────────────┐
-│          Rust Backend (Axum)            │
-│  ┌────────────┐      ┌────────────┐    │
-│  │  Official  │      │    SSH     │    │
-│  │  Gemini    │      │   Client   │    │
-│  │    CLI     │      │  (russh)   │    │
-│  └────────────┘      └────────────┘    │
-└─────────────┬──────────────┬────────────┘
-              │              │
-         Gemini CLI          SSH
-              │              │
-     Google Gemini API   Remote Server
+┌──────────────────────────────────────────────────────┐
+│                  Web Browser UI                       │
+│  ┌─────────────────────┬─────────────────────────┐   │
+│  │  Gemini Terminal    │   SSH Terminal          │   │
+│  │  (xterm.js)         │   (xterm.js)            │   │
+│  └─────────────────────┴─────────────────────────┘   │
+└───────┬──────────┬──────────────┬───────────────────┘
+        │          │              │
+    WS: Gemini  WS: Commands   WS: SSH
+        │          │              │
+┌───────┴──────────┴──────────────┴───────────────────┐
+│              Rust Backend (Axum)                     │
+│  ┌─────────────────┐  ┌──────────┐  ┌───────────┐  │
+│  │   Gemini CLI    │  │ Command  │  │    SSH    │  │
+│  │   Process       │  │ Approval │  │  Client   │  │
+│  │   Manager       │  │ System   │  │  (russh)  │  │
+│  └─────────────────┘  └──────────┘  └───────────┘  │
+└───────┬─────────────────────────────────┬───────────┘
+        │                                 │
+   Gemini CLI                            SSH
+   (spawned process)                      │
+        │                           Remote Server
+   Google Gemini API
 ```
 
 ## Prerequisites
@@ -157,31 +159,54 @@ Your authentication persists across container restarts via the `gemini-config` v
    - **Private Key**: Your SSH private key (if using key-based authentication)
 3. Click "Connect"
 
-### Using Gemini Assistant
+### Using the Dual Terminal Interface
 
-Once connected, you can:
+Once connected, you'll see two terminals side by side:
 
-1. **Ask Questions**: Type questions in the Gemini chat pane
-   - Example: "What files are in my current directory?"
-   - Example: "How do I check disk usage?"
+#### Left Pane: Gemini CLI Terminal
 
-2. **Get Contextual Help**: Gemini automatically observes terminal output
-   - Run a command in the terminal
-   - Ask Gemini to explain the output
-   - Get suggestions for next steps
+The interactive Gemini CLI runs directly in your browser:
 
-3. **Execute Commands**: Gemini can suggest commands
-   - Gemini will format suggested commands as: `EXECUTE: <command>`
-   - You'll see an approval dialog
-   - Approve or reject the command
-   - Approved commands execute automatically in the terminal
+1. **Authenticate**: On first launch, you'll see Gemini CLI's authentication menu
+   - Select "Login with Google" (recommended)
+   - Or use API key if already configured
+
+2. **Chat with Gemini**: Type prompts directly into the terminal
+   - Ask questions about programming, systems, etc.
+   - Request help understanding SSH terminal output
+   - Get recommendations for commands to run
+
+3. **Gemini Observes SSH**: The Gemini CLI automatically receives context from your SSH terminal
+   - All SSH terminal output is visible to Gemini
+   - Reference SSH output in your prompts
+   - Get contextual explanations and suggestions
+
+#### Right Pane: SSH Terminal
+
+Your live SSH connection to the remote server:
+
+1. **Run Commands**: Type commands as you would in any SSH session
+2. **Full Terminal Support**: Colors, cursor control, vim, etc.
+3. **Output Shared with Gemini**: Everything you see is available as context for Gemini
+
+#### Command Execution Flow
+
+When Gemini suggests running a command on the SSH terminal:
+
+1. Gemini formats the command as: `EXECUTE: <command>`
+2. An approval modal appears in the browser
+3. Review the command carefully
+4. Click "Approve & Execute" or "Reject"
+5. Approved commands run automatically in the SSH terminal (right pane)
+6. See the results in real-time
 
 ### Terminal Features
 
-- **Full Terminal Emulation**: Supports colors, cursor movement, etc.
-- **Resizable Panes**: Drag the divider to resize panes
-- **Copy/Paste**: Standard terminal copy/paste operations
-- **Scrollback**: Scroll through terminal history
+- **Dual Terminals**: Both Gemini and SSH terminals support full terminal emulation
+- **Resizable Panes**: Drag the divider to resize left/right panes
+- **Copy/Paste**: Standard terminal copy/paste operations in both terminals
+- **Scrollback**: Scroll through history in both terminals
+- **Real-time Sync**: SSH output automatically feeds to Gemini for context
 
 ## Configuration
 
@@ -276,15 +301,15 @@ By default, the application runs on port 3000. To change this:
 ```
 gemini-co-cli/
 ├── src/
-│   ├── main.rs           # Application entry point
+│   ├── main.rs           # Application entry point and routes
 │   ├── state.rs          # Session and state management
-│   ├── ssh.rs            # SSH client implementation
-│   ├── gemini.rs         # Gemini CLI wrapper
-│   └── websocket.rs      # WebSocket handlers
+│   ├── ssh.rs            # SSH client implementation (russh)
+│   ├── gemini.rs         # Gemini CLI process manager
+│   └── websocket.rs      # WebSocket handlers (3 types: Gemini, SSH, Commands)
 ├── static/
-│   ├── index.html        # Frontend HTML
+│   ├── index.html        # Frontend HTML (dual terminal UI)
 │   ├── style.css         # Styling
-│   └── app.js            # Frontend JavaScript
+│   └── app.js            # Frontend JavaScript (xterm.js integration)
 ├── Cargo.toml            # Rust dependencies
 ├── Dockerfile            # Container image definition
 └── docker-compose.yml    # Docker Compose configuration
@@ -301,9 +326,11 @@ To extend functionality:
 ## API Endpoints
 
 - `GET /` - Serve the main HTML page
+- `POST /api/session/create` - Create a new session
 - `POST /api/ssh/connect` - Establish SSH connection
-- `GET /ws/terminal/:session_id` - WebSocket for terminal communication
-- `GET /ws/gemini/:session_id` - WebSocket for Gemini communication
+- `GET /ws/gemini-terminal/:session_id` - WebSocket for Gemini CLI terminal
+- `GET /ws/ssh-terminal/:session_id` - WebSocket for SSH terminal
+- `GET /ws/commands/:session_id` - WebSocket for command approval system
 - `GET /static/*` - Serve static files
 
 ## License

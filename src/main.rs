@@ -36,9 +36,11 @@ async fn main() {
     // Build the application routes
     let app = Router::new()
         .route("/", get(root_handler))
+        .route("/api/session/create", post(websocket::create_session_handler))
         .route("/api/ssh/connect", post(websocket::ssh_connect_handler))
-        .route("/ws/terminal/:session_id", get(websocket::terminal_ws_handler))
-        .route("/ws/gemini/:session_id", get(websocket::gemini_ws_handler))
+        .route("/ws/gemini-terminal/:session_id", get(websocket::gemini_terminal_ws_handler))
+        .route("/ws/ssh-terminal/:session_id", get(websocket::ssh_terminal_ws_handler))
+        .route("/ws/commands/:session_id", get(websocket::command_approval_ws_handler))
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state);
