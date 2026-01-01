@@ -251,6 +251,8 @@ body {
     flex: 1;
     padding: 1rem;
     overflow: hidden;
+    min-height: 400px;
+    position: relative;
 }
 
 .command-preview {
