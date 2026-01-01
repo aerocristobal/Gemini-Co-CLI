@@ -218,6 +218,16 @@ function connectGeminiWebSocket() {
     geminiTerminalWs.onopen = () => {
         console.log('Gemini terminal WebSocket connected');
         geminiTerminal.write('\x1b[32m✓ Connected to Gemini CLI\x1b[0m\r\n\r\n');
+
+        // Send initial terminal size
+        if (geminiTerminal.cols && geminiTerminal.rows) {
+            geminiTerminalWs.send(JSON.stringify({
+                type: 'resize',
+                width: geminiTerminal.cols,
+                height: geminiTerminal.rows,
+            }));
+            console.log('Sent initial Gemini terminal size:', geminiTerminal.cols, 'x', geminiTerminal.rows);
+        }
     };
 
     geminiTerminalWs.onmessage = (event) => {
@@ -332,6 +342,16 @@ function connectSSHWebSocket() {
     sshTerminalWs.onopen = () => {
         console.log('SSH terminal WebSocket connected');
         sshTerminal.write('\x1b[32m✓ SSH connection established\x1b[0m\r\n\r\n');
+
+        // Send initial terminal size
+        if (sshTerminal.cols && sshTerminal.rows) {
+            sshTerminalWs.send(JSON.stringify({
+                type: 'resize',
+                width: sshTerminal.cols,
+                height: sshTerminal.rows,
+            }));
+            console.log('Sent initial SSH terminal size:', sshTerminal.cols, 'x', sshTerminal.rows);
+        }
     };
 
     sshTerminalWs.onmessage = (event) => {
