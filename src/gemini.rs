@@ -7,20 +7,25 @@ pub struct GeminiClient {
 
 impl GeminiClient {
     pub fn new() -> Result<Self> {
-        // No API key needed - relies on `gemini auth login` being run first
+        // Uses official @google/gemini-cli
+        // Authentication via GEMINI_API_KEY env var or interactive OAuth
         Ok(Self {
             model: "gemini-1.5-pro".to_string(),
         })
     }
 
-    /// Check if Gemini CLI is authenticated
+    /// Check if Gemini CLI is available and authenticated
+    /// Note: Official CLI doesn't have an explicit auth status command
+    /// We check by attempting a simple query
     pub async fn check_auth() -> Result<bool> {
         let output = Command::new("gemini")
-            .arg("auth")
-            .arg("status")
+            .arg("-p")
+            .arg("Hello")
+            .arg("--output-format")
+            .arg("json")
             .output()
             .await
-            .context("Failed to check Gemini auth status. Is Gemini CLI installed?")?;
+            .context("Failed to check Gemini CLI. Is it installed?")?;
 
         Ok(output.status.success())
     }
@@ -46,21 +51,21 @@ impl GeminiClient {
             user_message
         ));
 
-        // Execute gemini chat command
+        // Execute gemini with non-interactive prompt
+        // Official CLI syntax: gemini -p "prompt" -m model-name
         let output = Command::new("gemini")
-            .arg("chat")
-            .arg("--model")
-            .arg(&self.model)
-            .arg("--prompt")
+            .arg("-p")
             .arg(&full_prompt)
+            .arg("-m")
+            .arg(&self.model)
             .output()
             .await
-            .context("Failed to execute gemini CLI. Ensure it's installed and authenticated with 'gemini auth login'")?;
+            .context("Failed to execute gemini CLI. Ensure it's installed and authenticated.")?;
 
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!(
-                "Gemini CLI error: {}. Have you run 'gemini auth login'?",
+                "Gemini CLI error: {}. Authentication required. Set GEMINI_API_KEY or run 'docker run -it <container> gemini' to login with Google.",
                 error
             ));
         }

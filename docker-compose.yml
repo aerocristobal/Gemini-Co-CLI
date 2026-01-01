@@ -8,13 +8,15 @@ services:
     environment:
       - RUST_LOG=gemini_co_cli=debug,tower_http=debug
       # Option 1: Use API key (uncomment and set your key)
-      # - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      # Option 2: Use OAuth (default - requires running 'gemini auth login' first)
+      # Get key from: https://aistudio.google.com/apikey
+      # - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Option 2: Use Google OAuth (default - requires interactive login first)
     restart: unless-stopped
     volumes:
       - ./static:/app/static:ro
       # Mount Gemini CLI config directory for persistent auth
-      - gemini-config:/root/.config/gemini-co-cli
+      # OAuth credentials are stored here after running 'gemini' interactively
+      - gemini-config:/root/.config/@google/generative-ai-cli
 
 volumes:
   gemini-config:
