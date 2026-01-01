@@ -24,18 +24,21 @@ RUN cargo build --release
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies including Python for Gemini CLI
+# Install runtime dependencies including Node.js for official Gemini CLI
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
-    python3 \
-    python3-pip \
-    python3-venv \
     curl \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Generative AI SDK
-RUN pip3 install --break-system-packages google-generativeai google-auth-oauthlib
+# Install Node.js 20.x (required for Gemini CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install official Gemini CLI globally
+RUN npm install -g @google/gemini-cli
 
 # Create app directory
 WORKDIR /app
@@ -46,23 +49,21 @@ COPY --from=builder /app/target/release/gemini-co-cli .
 # Copy static files
 COPY --from=builder /app/static ./static
 
-# Copy and install Gemini CLI wrapper
-COPY scripts/gemini-cli.py /usr/local/bin/gemini-cli.py
-RUN chmod +x /usr/local/bin/gemini-cli.py && \
-    ln -s /usr/local/bin/gemini-cli.py /usr/local/bin/gemini
-
 # Expose port
 EXPOSE 3000
 
 # Set environment variables
 ENV RUST_LOG=info
-ENV PATH="/usr/local/bin:${PATH}"
 
-# Note: Users must authenticate Gemini CLI before running:
+# Note: Authentication with Gemini CLI
 # Option 1 - API Key (simpler):
-#   docker run -e GOOGLE_API_KEY=your_key <image> gemini auth login
-# Option 2 - OAuth (more secure):
-#   Place credentials.json in ~/.config/gemini-co-cli/ and run:
-#   docker run -it <image> gemini auth login
+#   Set GEMINI_API_KEY environment variable
+#   docker run -e GEMINI_API_KEY=your_key <image>
+#
+# Option 2 - Google OAuth (recommended):
+#   Run the container interactively first to authenticate:
+#   docker run -it <image> gemini
+#   Then select "Login with Google" and follow browser prompts
+#   Credentials will be cached in the volume for future sessions
 
 CMD ["./gemini-co-cli"]
