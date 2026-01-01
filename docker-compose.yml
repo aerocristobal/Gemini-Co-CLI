@@ -6,8 +6,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - RUST_LOG=gemini_co_cli=debug,tower_http=debug
     restart: unless-stopped
     volumes:
       - ./static:/app/static:ro
+      # Mount Gemini CLI config directory for persistent auth
+      # Run 'docker-compose run gemini-co-cli gemini auth login' first to authenticate
+      - gemini-config:/root/.config/google-generativeai
+
+volumes:
+  gemini-config:

@@ -30,12 +30,12 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 │          Rust Backend (Axum)            │
 │  ┌────────────┐      ┌────────────┐    │
 │  │  Gemini    │      │    SSH     │    │
-│  │   API      │      │   Client   │    │
-│  │  Client    │      │  (russh)   │    │
+│  │   CLI      │      │   Client   │    │
+│  │  Wrapper   │      │  (russh)   │    │
 │  └────────────┘      └────────────┘    │
 └─────────────┬──────────────┬────────────┘
               │              │
-              │              SSH
+         Gemini CLI          SSH
               │              │
      Google Gemini API   Remote Server
 ```
@@ -43,8 +43,8 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 ## Prerequisites
 
 - Docker and Docker Compose (for containerized deployment)
-- OR Rust 1.75+ (for local development)
-- Google Gemini API Key ([Get one here](https://makersuite.google.com/app/apikey))
+- OR Rust 1.83+ (for local development)
+- Google Gemini CLI installed and authenticated (see setup below)
 - SSH access to a remote server
 
 ## Quick Start with Docker
@@ -55,19 +55,20 @@ A containerized web application that provides a Google Gemini Canvas-like interf
    cd gemini-co-cli
    ```
 
-2. Create a `.env` file from the example:
+2. Build the Docker image:
    ```bash
-   cp .env.example .env
+   docker-compose build
    ```
 
-3. Edit `.env` and add your Gemini API key:
+3. Authenticate with Google Gemini CLI (one-time setup):
    ```bash
-   GEMINI_API_KEY=your_actual_api_key_here
+   docker-compose run gemini-co-cli gemini auth login
    ```
+   Follow the prompts to authenticate with your Google account. Your credentials will be stored in a Docker volume for future use.
 
-4. Build and run with Docker Compose:
+4. Start the application:
    ```bash
-   docker-compose up --build
+   docker-compose up
    ```
 
 5. Open your browser and navigate to:
@@ -84,20 +85,29 @@ A containerized web application that provides a Google Gemini Canvas-like interf
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
-2. Clone and setup:
+2. Install Google Gemini CLI:
+   ```bash
+   pip install google-generativeai-cli
+   ```
+
+3. Authenticate with Gemini CLI (one-time setup):
+   ```bash
+   gemini auth login
+   ```
+   Follow the prompts to authenticate with your Google account.
+
+4. Clone and setup:
    ```bash
    git clone https://github.com/yourusername/gemini-co-cli.git
    cd gemini-co-cli
-   cp .env.example .env
-   # Edit .env with your API key
    ```
 
-3. Run the application:
+5. Run the application:
    ```bash
    cargo run --release
    ```
 
-4. Open http://localhost:3000 in your browser.
+6. Open http://localhost:3000 in your browser.
 
 ## Usage
 
@@ -142,8 +152,18 @@ Once connected, you can:
 
 ### Environment Variables
 
-- `GEMINI_API_KEY`: Your Google Gemini API key (required)
 - `RUST_LOG`: Logging level (optional, default: `gemini_co_cli=debug,tower_http=debug`)
+
+### Gemini Authentication
+
+The application uses the Google Gemini CLI for authentication instead of API keys. Benefits:
+- No need to manage API keys
+- OAuth-based authentication with your Google account
+- Credentials stored securely by the Gemini CLI
+
+**Docker:** Authentication credentials are persisted in a Docker volume named `gemini-config`.
+
+**Local:** Authentication credentials are stored in `~/.config/google-generativeai/`.
 
 ### Port Configuration
 
@@ -163,10 +183,11 @@ By default, the application runs on port 3000. To change this:
 ## Security Considerations
 
 - **SSH Credentials**: Credentials are only stored in memory during active sessions
-- **API Keys**: Never commit `.env` file to version control
+- **Gemini Authentication**: OAuth credentials managed securely by Google Gemini CLI
 - **Command Approval**: Always review commands before approval
 - **HTTPS**: For production, use a reverse proxy (nginx, traefik) with SSL/TLS
 - **Server Key Verification**: Currently accepts all server keys (modify `src/ssh.rs` for stricter verification)
+- **Docker Volumes**: Gemini credentials stored in Docker volume - backup if needed
 
 ## Troubleshooting
 
@@ -185,9 +206,10 @@ By default, the application runs on port 3000. To change this:
 ### Gemini Issues
 
 - **Gemini not responding**:
-  - Verify `GEMINI_API_KEY` is set correctly
-  - Check API quota limits
+  - Verify you've authenticated: `gemini auth login` (local) or `docker-compose run gemini-co-cli gemini auth login` (Docker)
+  - Check Gemini CLI is installed: `gemini --version`
   - Review browser console for WebSocket errors
+  - Check application logs for Gemini CLI errors
 
 - **Commands not executing**:
   - Ensure you approved the command

@@ -1,49 +1,28 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::env;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GeminiRequest {
-    pub contents: Vec<Content>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Content {
-    pub parts: Vec<Part>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Part {
-    pub text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GeminiResponse {
-    pub candidates: Vec<Candidate>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Candidate {
-    pub content: Content,
-}
+use tokio::process::Command;
 
 pub struct GeminiClient {
-    api_key: String,
-    client: reqwest::Client,
     model: String,
 }
 
 impl GeminiClient {
     pub fn new() -> Result<Self> {
-        let api_key = env::var("GEMINI_API_KEY")
-            .context("GEMINI_API_KEY environment variable not set")?;
-
+        // No API key needed - relies on `gemini auth login` being run first
         Ok(Self {
-            api_key,
-            client: reqwest::Client::new(),
-            model: "gemini-1.5-pro-latest".to_string(),
+            model: "gemini-1.5-pro".to_string(),
         })
+    }
+
+    /// Check if Gemini CLI is authenticated
+    pub async fn check_auth() -> Result<bool> {
+        let output = Command::new("gemini")
+            .arg("auth")
+            .arg("status")
+            .output()
+            .await
+            .context("Failed to check Gemini auth status. Is Gemini CLI installed?")?;
+
+        Ok(output.status.success())
     }
 
     pub async fn send_message(
@@ -55,55 +34,47 @@ impl GeminiClient {
         let mut full_prompt = String::new();
 
         if !context.is_empty() {
-            full_prompt.push_str("Terminal Context:\n");
+            full_prompt.push_str("Terminal Context (recent output):\n```\n");
             for ctx in context.iter().rev().take(20).rev() {
                 full_prompt.push_str(&format!("{}\n", ctx));
             }
-            full_prompt.push_str("\n");
+            full_prompt.push_str("```\n\n");
         }
 
-        full_prompt.push_str(&format!("User: {}\n\nPlease provide a helpful response. If you want to execute a command in the terminal, format it as: EXECUTE: <command>", user_message));
+        full_prompt.push_str(&format!(
+            "{}\n\nIMPORTANT: If you want to execute a command in the terminal, format it as: EXECUTE: <command>",
+            user_message
+        ));
 
-        let request = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![Part {
-                    text: full_prompt,
-                }],
-            }],
-        };
-
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
+        // Execute gemini chat command
+        let output = Command::new("gemini")
+            .arg("chat")
+            .arg("--model")
+            .arg(&self.model)
+            .arg("--prompt")
+            .arg(&full_prompt)
+            .output()
             .await
-            .context("Failed to send request to Gemini API")?;
+            .context("Failed to execute gemini CLI. Ensure it's installed and authenticated with 'gemini auth login'")?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Gemini API error: {}", error_text));
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Gemini CLI error: {}. Have you run 'gemini auth login'?",
+                error
+            ));
         }
 
-        let gemini_response: GeminiResponse = response
-            .json()
-            .await
-            .context("Failed to parse Gemini response")?;
+        let response = String::from_utf8_lossy(&output.stdout).to_string();
 
-        if let Some(candidate) = gemini_response.candidates.first() {
-            if let Some(part) = candidate.content.parts.first() {
-                Ok(part.text.clone())
-            } else {
-                Err(anyhow::anyhow!("No text in Gemini response"))
-            }
-        } else {
-            Err(anyhow::anyhow!("No candidates in Gemini response"))
+        // Clean up the response (remove any CLI formatting)
+        let cleaned_response = response.trim().to_string();
+
+        if cleaned_response.is_empty() {
+            return Err(anyhow::anyhow!("Empty response from Gemini CLI"));
         }
+
+        Ok(cleaned_response)
     }
 
     /// Extract command from Gemini response if present
