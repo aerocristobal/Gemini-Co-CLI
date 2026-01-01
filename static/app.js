@@ -139,6 +139,9 @@ function setupTerminals() {
         geminiTerminal.write('\x1b[36mGemini CLI Terminal\x1b[0m\r\n');
         geminiTerminal.write('Connecting to Gemini...\r\n\r\n');
 
+        // Focus the terminal to make it interactive
+        geminiTerminal.focus();
+
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
             geminiFitAddon.fit();
@@ -148,6 +151,8 @@ function setupTerminals() {
                 const xtermRect = xtermElement.getBoundingClientRect();
                 console.log('Gemini xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
             }
+            // Focus again after fit
+            geminiTerminal.focus();
         }, 100);
 
         // Handle Gemini terminal input
@@ -158,6 +163,11 @@ function setupTerminals() {
                     data: data,
                 }));
             }
+        });
+
+        // Focus Gemini terminal when clicked
+        geminiContainer.addEventListener('click', () => {
+            geminiTerminal.focus();
         });
 
         // Setup SSH terminal
@@ -193,6 +203,9 @@ function setupTerminals() {
         sshTerminal.write('\x1b[32mSSH Terminal\x1b[0m\r\n');
         sshTerminal.write('Connecting to SSH server...\r\n\r\n');
 
+        // Focus the terminal to make it interactive
+        sshTerminal.focus();
+
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
             sshFitAddon.fit();
@@ -202,6 +215,8 @@ function setupTerminals() {
                 const xtermRect = xtermElement.getBoundingClientRect();
                 console.log('SSH xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
             }
+            // Focus again after fit
+            sshTerminal.focus();
         }, 100);
 
         // Handle SSH terminal input
@@ -212,6 +227,11 @@ function setupTerminals() {
                     data: data,
                 }));
             }
+        });
+
+        // Focus SSH terminal when clicked
+        sshContainer.addEventListener('click', () => {
+            sshTerminal.focus();
         });
 
         // Handle window resize for both terminals

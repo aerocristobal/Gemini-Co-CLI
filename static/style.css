@@ -254,6 +254,13 @@ body {
     position: relative;
     /* Debug: show container boundaries */
     background: #0a0a0a;
+    cursor: text;
+}
+
+/* Ensure xterm canvas is interactive */
+#gemini-terminal .xterm,
+#ssh-terminal .xterm {
+    cursor: text;
 }
 
 .command-preview {
