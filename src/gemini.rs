@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 /// Manages an interactive Gemini CLI terminal session using PTY
 pub struct GeminiTerminal {
     pty_pair: Arc<Mutex<portable_pty::PtyPair>>,
-    _child: Box<dyn portable_pty::Child + Send>,
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
 }
 
 impl GeminiTerminal {
@@ -26,7 +26,21 @@ impl GeminiTerminal {
             .context("Failed to create PTY")?;
 
         // Build command to run gemini CLI
-        let cmd = CommandBuilder::new("gemini");
+        let mut cmd = CommandBuilder::new("gemini");
+
+        // Ensure environment variables are passed through
+        // This is critical for GEMINI_API_KEY authentication
+        if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+            cmd.env("GEMINI_API_KEY", api_key);
+            tracing::info!("Gemini CLI starting with API key authentication");
+        } else {
+            tracing::warn!("GEMINI_API_KEY not set - Gemini CLI may require authentication");
+        }
+
+        // Pass through HOME for OAuth credential storage
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.env("HOME", home);
+        }
 
         // Spawn the process in the PTY
         let child = pty_pair
@@ -34,10 +48,28 @@ impl GeminiTerminal {
             .spawn_command(cmd)
             .context("Failed to spawn gemini CLI. Is it installed?")?;
 
+        tracing::info!("Gemini CLI process spawned successfully");
+
         Ok(Self {
             pty_pair: Arc::new(Mutex::new(pty_pair)),
-            _child: child,
+            child: Arc::new(Mutex::new(child)),
         })
+    }
+
+    /// Check if the child process is still running
+    pub async fn is_running(&self) -> bool {
+        let mut child = self.child.lock().await;
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                tracing::warn!("Gemini CLI process exited with status: {:?}", status);
+                false
+            }
+            Ok(None) => true, // Still running
+            Err(e) => {
+                tracing::error!("Error checking Gemini CLI process status: {}", e);
+                false
+            }
+        }
     }
 
     /// Get reader for PTY output

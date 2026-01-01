@@ -148,10 +148,35 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
-    // Keep gemini instance for resize operations
+    // Keep gemini instance for resize operations and process monitoring
     let gemini_arc = Arc::new(Mutex::new(gemini));
 
-    let (ws_sender, mut ws_receiver) = socket.split();
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Check if process is still running after spawn
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    let gemini_check = gemini_arc.lock().await;
+    let is_running = gemini_check.is_running().await;
+    drop(gemini_check);
+
+    if !is_running {
+        tracing::error!("Gemini CLI process exited immediately after spawn - authentication required");
+        // Send error message to WebSocket
+        let error_msg = TerminalMessage::Output {
+            data: format!(
+                "\x1b[31m✗ Gemini CLI authentication required\x1b[0m\r\n\r\n\
+                Please set GEMINI_API_KEY environment variable:\r\n\
+                1. Get an API key from: \x1b[36mhttps://aistudio.google.com/apikey\x1b[0m\r\n\
+                2. Set the environment variable in docker-compose.yml:\r\n\
+                   \x1b[33m- GEMINI_API_KEY=your_api_key_here\x1b[0m\r\n\r\n\
+                Or authenticate with OAuth by running:\r\n\
+                   \x1b[33mdocker-compose exec gemini-co-cli gemini\x1b[0m\r\n\r\n"
+            ),
+        };
+        let _ = ws_sender.send(Message::Text(serde_json::to_string(&error_msg).unwrap())).await;
+        return; // Exit early since process is not running
+    }
+
     let ws_sender = Arc::new(Mutex::new(ws_sender));
 
     // Get PTY reader and writer
