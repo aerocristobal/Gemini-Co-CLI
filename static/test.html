@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Test</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #0f0f0f;
+            color: #e8e8e8;
+            font-family: Arial, sans-serif;
+        }
+        #terminal-container {
+            width: 800px;
+            height: 400px;
+            border: 2px solid #4ade80;
+            background: #1a1a1a;
+        }
+        .info {
+            margin: 20px 0;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>XTerm.js Test Page</h1>
+    <div class="info">
+        <p>Terminal Library Loaded: <span id="status">Checking...</span></p>
+        <p>Terminal Created: <span id="created">Checking...</span></p>
+    </div>
+    <div id="terminal-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script>
+        // Check if Terminal is available
+        if (typeof Terminal !== 'undefined') {
+            document.getElementById('status').textContent = 'YES ✓';
+            document.getElementById('status').style.color = '#4ade80';
+
+            try {
+                // Create terminal
+                const term = new Terminal({
+                    cursorBlink: true,
+                    fontSize: 14,
+                    theme: {
+                        background: '#1a1a1a',
+                        foreground: '#e8e8e8',
+                        cursor: '#4ade80',
+                    },
+                });
+
+                // Load fit addon
+                const fitAddon = new FitAddon.FitAddon();
+                term.loadAddon(fitAddon);
+
+                // Open terminal
+                term.open(document.getElementById('terminal-container'));
+                fitAddon.fit();
+
+                // Write test message
+                term.write('Terminal initialized successfully!\r\n');
+                term.write('XTerm.js version: 5.3.0\r\n');
+                term.write('\x1b[32mTerminal is working! ✓\x1b[0m\r\n');
+
+                document.getElementById('created').textContent = 'YES ✓';
+                document.getElementById('created').style.color = '#4ade80';
+            } catch (error) {
+                document.getElementById('created').textContent = 'ERROR: ' + error.message;
+                document.getElementById('created').style.color = '#f87171';
+                console.error('Terminal creation error:', error);
+            }
+        } else {
+            document.getElementById('status').textContent = 'NO ✗';
+            document.getElementById('status').style.color = '#f87171';
+        }
+    </script>
+</body>
+</html>

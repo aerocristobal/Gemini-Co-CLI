@@ -92,83 +92,129 @@ function initializeApp() {
 
 // Setup both xterm.js terminals
 function setupTerminals() {
-    // Setup Gemini terminal
-    geminiTerminal = new Terminal({
-        cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-        theme: {
-            background: '#1a1a2e',
-            foreground: '#e8e8e8',
-            cursor: '#4ade80',
-            selection: '#ffffff33',
-        },
-    });
+    try {
+        console.log('Setting up terminals...');
 
-    geminiFitAddon = new FitAddon.FitAddon();
-    geminiTerminal.loadAddon(geminiFitAddon);
-    geminiTerminal.open(document.getElementById('gemini-terminal'));
-    geminiFitAddon.fit();
-
-    // Handle Gemini terminal input
-    geminiTerminal.onData((data) => {
-        if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
-            geminiTerminalWs.send(JSON.stringify({
-                type: 'input',
-                data: data,
-            }));
-        }
-    });
-
-    // Setup SSH terminal
-    sshTerminal = new Terminal({
-        cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-        theme: {
-            background: '#0f0f0f',
-            foreground: '#e8e8e8',
-            cursor: '#4ade80',
-            selection: '#ffffff33',
-        },
-    });
-
-    sshFitAddon = new FitAddon.FitAddon();
-    sshTerminal.loadAddon(sshFitAddon);
-    sshTerminal.open(document.getElementById('ssh-terminal'));
-    sshFitAddon.fit();
-
-    // Handle SSH terminal input
-    sshTerminal.onData((data) => {
-        if (sshTerminalWs && sshTerminalWs.readyState === WebSocket.OPEN) {
-            sshTerminalWs.send(JSON.stringify({
-                type: 'input',
-                data: data,
-            }));
-        }
-    });
-
-    // Handle window resize for both terminals
-    window.addEventListener('resize', () => {
-        geminiFitAddon.fit();
-        sshFitAddon.fit();
-
-        if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
-            geminiTerminalWs.send(JSON.stringify({
-                type: 'resize',
-                width: geminiTerminal.cols,
-                height: geminiTerminal.rows,
-            }));
+        // Verify xterm.js is loaded
+        if (typeof Terminal === 'undefined') {
+            console.error('Terminal library not loaded!');
+            return;
         }
 
-        if (sshTerminalWs && sshTerminalWs.readyState === WebSocket.OPEN) {
-            sshTerminalWs.send(JSON.stringify({
-                type: 'resize',
-                width: sshTerminal.cols,
-                height: sshTerminal.rows,
-            }));
+        if (typeof FitAddon === 'undefined') {
+            console.error('FitAddon library not loaded!');
+            return;
         }
-    });
+
+        // Setup Gemini terminal
+        console.log('Creating Gemini terminal...');
+        geminiTerminal = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#1a1a2e',
+                foreground: '#e8e8e8',
+                cursor: '#4ade80',
+                selection: '#ffffff33',
+            },
+        });
+
+        geminiFitAddon = new FitAddon.FitAddon();
+        geminiTerminal.loadAddon(geminiFitAddon);
+
+        const geminiContainer = document.getElementById('gemini-terminal');
+        if (!geminiContainer) {
+            console.error('Gemini terminal container not found!');
+            return;
+        }
+
+        geminiTerminal.open(geminiContainer);
+
+        // Fit after a short delay to ensure DOM is ready
+        setTimeout(() => {
+            geminiFitAddon.fit();
+            console.log('Gemini terminal fitted:', geminiTerminal.cols, 'x', geminiTerminal.rows);
+        }, 100);
+
+        // Handle Gemini terminal input
+        geminiTerminal.onData((data) => {
+            if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
+                geminiTerminalWs.send(JSON.stringify({
+                    type: 'input',
+                    data: data,
+                }));
+            }
+        });
+
+        // Setup SSH terminal
+        console.log('Creating SSH terminal...');
+        sshTerminal = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#0f0f0f',
+                foreground: '#e8e8e8',
+                cursor: '#4ade80',
+                selection: '#ffffff33',
+            },
+        });
+
+        sshFitAddon = new FitAddon.FitAddon();
+        sshTerminal.loadAddon(sshFitAddon);
+
+        const sshContainer = document.getElementById('ssh-terminal');
+        if (!sshContainer) {
+            console.error('SSH terminal container not found!');
+            return;
+        }
+
+        sshTerminal.open(sshContainer);
+
+        // Fit after a short delay to ensure DOM is ready
+        setTimeout(() => {
+            sshFitAddon.fit();
+            console.log('SSH terminal fitted:', sshTerminal.cols, 'x', sshTerminal.rows);
+        }, 100);
+
+        // Handle SSH terminal input
+        sshTerminal.onData((data) => {
+            if (sshTerminalWs && sshTerminalWs.readyState === WebSocket.OPEN) {
+                sshTerminalWs.send(JSON.stringify({
+                    type: 'input',
+                    data: data,
+                }));
+            }
+        });
+
+        // Handle window resize for both terminals
+        window.addEventListener('resize', () => {
+            if (geminiFitAddon) geminiFitAddon.fit();
+            if (sshFitAddon) sshFitAddon.fit();
+
+            if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
+                geminiTerminalWs.send(JSON.stringify({
+                    type: 'resize',
+                    width: geminiTerminal.cols,
+                    height: geminiTerminal.rows,
+                }));
+            }
+
+            if (sshTerminalWs && sshTerminalWs.readyState === WebSocket.OPEN) {
+                sshTerminalWs.send(JSON.stringify({
+                    type: 'resize',
+                    width: sshTerminal.cols,
+                    height: sshTerminal.rows,
+                }));
+            }
+        });
+
+        console.log('Terminals setup complete');
+    } catch (error) {
+        console.error('Error setting up terminals:', error);
+        alert('Failed to initialize terminals: ' + error.message);
+    }
 }
 
 // Setup WebSocket connections
