@@ -38,3 +38,7 @@ dotenvy = "0.15"
 
 # UUID for session management
 uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Pin base64ct to version compatible with Rust 1.83
+[dependencies.base64ct]
+version = "=1.6.0"
