@@ -131,6 +131,10 @@ function setupTerminals() {
 
         geminiTerminal.open(geminiContainer);
 
+        // Log container dimensions
+        const geminiRect = geminiContainer.getBoundingClientRect();
+        console.log('Gemini container dimensions:', geminiRect.width, 'x', geminiRect.height);
+
         // Write initial message
         geminiTerminal.write('\x1b[36mGemini CLI Terminal\x1b[0m\r\n');
         geminiTerminal.write('Connecting to Gemini...\r\n\r\n');
@@ -139,6 +143,11 @@ function setupTerminals() {
         setTimeout(() => {
             geminiFitAddon.fit();
             console.log('Gemini terminal fitted:', geminiTerminal.cols, 'x', geminiTerminal.rows);
+            const xtermElement = geminiContainer.querySelector('.xterm');
+            if (xtermElement) {
+                const xtermRect = xtermElement.getBoundingClientRect();
+                console.log('Gemini xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
+            }
         }, 100);
 
         // Handle Gemini terminal input
@@ -176,6 +185,10 @@ function setupTerminals() {
 
         sshTerminal.open(sshContainer);
 
+        // Log container dimensions
+        const sshRect = sshContainer.getBoundingClientRect();
+        console.log('SSH container dimensions:', sshRect.width, 'x', sshRect.height);
+
         // Write initial message
         sshTerminal.write('\x1b[32mSSH Terminal\x1b[0m\r\n');
         sshTerminal.write('Connecting to SSH server...\r\n\r\n');
@@ -184,6 +197,11 @@ function setupTerminals() {
         setTimeout(() => {
             sshFitAddon.fit();
             console.log('SSH terminal fitted:', sshTerminal.cols, 'x', sshTerminal.rows);
+            const xtermElement = sshContainer.querySelector('.xterm');
+            if (xtermElement) {
+                const xtermRect = xtermElement.getBoundingClientRect();
+                console.log('SSH xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
+            }
         }, 100);
 
         // Handle SSH terminal input
@@ -198,8 +216,15 @@ function setupTerminals() {
 
         // Handle window resize for both terminals
         window.addEventListener('resize', () => {
-            if (geminiFitAddon) geminiFitAddon.fit();
-            if (sshFitAddon) sshFitAddon.fit();
+            console.log('Window resized, refitting terminals...');
+            if (geminiFitAddon) {
+                geminiFitAddon.fit();
+                console.log('Gemini refitted:', geminiTerminal.cols, 'x', geminiTerminal.rows);
+            }
+            if (sshFitAddon) {
+                sshFitAddon.fit();
+                console.log('SSH refitted:', sshTerminal.cols, 'x', sshTerminal.rows);
+            }
 
             if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
                 geminiTerminalWs.send(JSON.stringify({
