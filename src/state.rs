@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::ssh::SshSession;
 
-/// Represents a user session with both terminal and Gemini connections
+/// Represents a user session with both Gemini and SSH terminals
 #[derive(Clone)]
 pub struct Session {
     pub id: Uuid,
     pub ssh_session: Option<Arc<Mutex<SshSession>>>,
-    pub terminal_output_history: Arc<RwLock<Vec<String>>>,
-    pub gemini_context: Arc<RwLock<Vec<String>>>,
+    pub ssh_output_buffer: Arc<RwLock<Vec<String>>>,
     pub pending_commands: Arc<Mutex<Vec<PendingCommand>>>,
+    /// Channel to send SSH output to Gemini terminal
+    pub ssh_to_gemini_tx: Option<Arc<Mutex<mpsc::UnboundedSender<String>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -27,25 +28,33 @@ impl Session {
         Self {
             id: Uuid::new_v4(),
             ssh_session: None,
-            terminal_output_history: Arc::new(RwLock::new(Vec::new())),
-            gemini_context: Arc::new(RwLock::new(Vec::new())),
+            ssh_output_buffer: Arc::new(RwLock::new(Vec::new())),
             pending_commands: Arc::new(Mutex::new(Vec::new())),
+            ssh_to_gemini_tx: None,
         }
     }
 
-    pub async fn add_terminal_output(&self, output: String) {
-        let mut history = self.terminal_output_history.write().await;
-        history.push(output.clone());
+    /// Add SSH terminal output to the buffer
+    pub async fn add_ssh_output(&self, output: String) {
+        let mut buffer = self.ssh_output_buffer.write().await;
+        buffer.push(output.clone());
 
-        // Also add to Gemini context for AI awareness
-        let mut context = self.gemini_context.write().await;
-        context.push(format!("Terminal output: {}", output));
-
-        // Keep context size manageable (last 100 entries)
-        if context.len() > 100 {
-            let remove_count = context.len() - 100;
-            context.drain(0..remove_count);
+        // Keep buffer size manageable (last 100 entries)
+        if buffer.len() > 100 {
+            let remove_count = buffer.len() - 100;
+            buffer.drain(0..remove_count);
         }
+
+        // Also send to Gemini terminal if connected
+        if let Some(tx) = &self.ssh_to_gemini_tx {
+            let tx = tx.lock().await;
+            let _ = tx.send(output);
+        }
+    }
+
+    /// Get recent SSH output for Gemini context
+    pub async fn get_ssh_context(&self) -> Vec<String> {
+        self.ssh_output_buffer.read().await.clone()
     }
 
     pub async fn add_pending_command(&self, command: String) -> Uuid {
@@ -69,8 +78,9 @@ impl Session {
         }
     }
 
-    pub async fn get_context(&self) -> Vec<String> {
-        self.gemini_context.read().await.clone()
+    /// Set the channel to send SSH output to Gemini
+    pub async fn set_ssh_to_gemini_channel(&mut self, tx: mpsc::UnboundedSender<String>) {
+        self.ssh_to_gemini_tx = Some(Arc::new(Mutex::new(tx)));
     }
 }
 
