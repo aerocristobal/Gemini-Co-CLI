@@ -7,42 +7,11 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div id="connection-modal" class="modal">
-        <div class="modal-content">
-            <h2>Connect to SSH Server</h2>
-            <form id="ssh-form">
-                <div class="form-group">
-                    <label for="host">Host:</label>
-                    <input type="text" id="host" name="host" required placeholder="example.com">
-                </div>
-                <div class="form-group">
-                    <label for="port">Port:</label>
-                    <input type="number" id="port" name="port" value="22" required>
-                </div>
-                <div class="form-group">
-                    <label for="username">Username:</label>
-                    <input type="text" id="username" name="username" required>
-                </div>
-                <div class="form-group">
-                    <label for="password">Password:</label>
-                    <input type="password" id="password" name="password" placeholder="Leave empty if using key">
-                </div>
-                <div class="form-group">
-                    <label for="private-key">Private Key (optional):</label>
-                    <textarea id="private-key" name="private-key" rows="4" placeholder="Paste private key here"></textarea>
-                </div>
-                <div id="connection-error" class="error" style="display: none;"></div>
-                <button type="submit" class="btn-primary">Connect</button>
-            </form>
-        </div>
-    </div>
-
-    <div id="app-container" style="display: none;">
+    <div id="app-container">
         <div class="header">
             <h1>🤖 Gemini Co-CLI</h1>
             <div class="header-info">
-                <span id="connection-status">Connected</span>
-                <button id="disconnect-btn" class="btn-secondary">Disconnect</button>
+                <span id="ssh-status" class="status-badge disconnected">SSH: Disconnected</span>
             </div>
         </div>
 
@@ -61,6 +30,38 @@
                     <h2>💻 SSH Terminal</h2>
                 </div>
                 <div id="ssh-terminal"></div>
+
+                <!-- SSH Connection Form (shown initially) -->
+                <div id="ssh-connection-form" class="ssh-form-container">
+                    <h3>Connect to SSH Server</h3>
+                    <form id="ssh-form">
+                        <div class="form-group">
+                            <label for="host">Host:</label>
+                            <input type="text" id="host" name="host" required placeholder="example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="port">Port:</label>
+                            <input type="number" id="port" name="port" value="22" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="username">Username:</label>
+                            <input type="text" id="username" name="username" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="password">Password:</label>
+                            <input type="password" id="password" name="password" placeholder="Leave empty if using key">
+                        </div>
+                        <div class="form-group">
+                            <label for="private-key">Private Key (optional):</label>
+                            <textarea id="private-key" name="private-key" rows="3" placeholder="Paste private key here"></textarea>
+                        </div>
+                        <div id="ssh-error" class="error" style="display: none;"></div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary">Connect</button>
+                            <button type="button" id="disconnect-ssh-btn" class="btn-secondary" style="display: none;">Disconnect</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
