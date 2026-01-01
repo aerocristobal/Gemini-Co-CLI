@@ -32,12 +32,21 @@ body {
     gap: 1rem;
 }
 
-#connection-status {
+.status-badge {
     padding: 0.5rem 1rem;
-    background: #1e4620;
-    color: #4ade80;
     border-radius: 4px;
     font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.status-badge.connected {
+    background: #1e4620;
+    color: #4ade80;
+}
+
+.status-badge.disconnected {
+    background: #4a1e1e;
+    color: #f87171;
 }
 
 .modal {
@@ -164,6 +173,7 @@ body {
 .terminal-pane {
     flex: 1;
     min-width: 300px;
+    position: relative;
 }
 
 .pane-header {
@@ -254,6 +264,50 @@ body {
     position: relative;
     /* Debug: show container boundaries */
     background: #0a0a0a;
+    cursor: text;
+}
+
+/* Ensure xterm canvas is interactive */
+#gemini-terminal .xterm,
+#ssh-terminal .xterm {
+    cursor: text;
+}
+
+/* SSH Connection Form Overlay */
+.ssh-form-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 15, 15, 0.98);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    z-index: 10;
+}
+
+.ssh-form-container h3 {
+    color: #fff;
+    margin-bottom: 1.5rem;
+    font-size: 1.25rem;
+}
+
+.ssh-form-container form {
+    width: 100%;
+    max-width: 400px;
+}
+
+.ssh-form-container .form-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.ssh-form-container .form-actions button {
+    flex: 1;
 }
 
 .command-preview {

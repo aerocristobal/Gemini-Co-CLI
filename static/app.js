@@ -8,86 +8,50 @@ let sshTerminal = null;
 let geminiFitAddon = null;
 let sshFitAddon = null;
 let pendingCommand = null;
+let sshConnected = false;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
-    setupSSHForm();
-    setupResizer();
+    initializeApp();
 });
 
-// Setup SSH connection form
-function setupSSHForm() {
-    const form = document.getElementById('ssh-form');
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
+// Initialize the main application immediately
+async function initializeApp() {
+    try {
+        // Create a session
+        const response = await fetch('/api/session/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({}),
+        });
 
-        const formData = {
-            host: document.getElementById('host').value,
-            port: parseInt(document.getElementById('port').value),
-            username: document.getElementById('username').value,
-            password: document.getElementById('password').value || null,
-            private_key: document.getElementById('private-key').value || null,
-        };
-
-        try {
-            // First, create a session
-            const sessionResponse = await fetch('/api/session/create', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({}),
-            });
-
-            const sessionResult = await sessionResponse.json();
-            if (!sessionResult.success) {
-                showError('Failed to create session');
-                return;
-            }
-
-            sessionId = sessionResult.session_id;
-
-            // Then connect SSH
-            const sshResponse = await fetch('/api/ssh/connect', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(formData),
-            });
-
-            const sshResult = await sshResponse.json();
-
-            if (sshResult.success) {
-                // Use the session ID from SSH connection if different
-                sessionId = sshResult.session_id;
-                hideConnectionModal();
-                initializeApp();
-            } else {
-                showError(sshResult.error || 'SSH connection failed');
-            }
-        } catch (error) {
-            showError('Failed to connect: ' + error.message);
+        const result = await response.json();
+        if (!result.success) {
+            console.error('Failed to create session');
+            alert('Failed to create session. Please refresh the page.');
+            return;
         }
-    });
-}
 
-function showError(message) {
-    const errorDiv = document.getElementById('connection-error');
-    errorDiv.textContent = message;
-    errorDiv.style.display = 'block';
-}
+        sessionId = result.session_id;
+        console.log('Session created:', sessionId);
 
-function hideConnectionModal() {
-    document.getElementById('connection-modal').style.display = 'none';
-    document.getElementById('app-container').style.display = 'block';
-}
+        // Setup terminals immediately
+        setupTerminals();
 
-// Initialize the main application
-function initializeApp() {
-    setupTerminals();
-    setupDisconnect();
-    connectWebSockets();
+        // Connect Gemini WebSocket
+        connectGeminiWebSocket();
+
+        // Setup SSH form handler
+        setupSSHForm();
+
+        // Setup resizer
+        setupResizer();
+    } catch (error) {
+        console.error('Failed to initialize app:', error);
+        alert('Failed to initialize application: ' + error.message);
+    }
 }
 
 // Setup both xterm.js terminals
@@ -131,23 +95,20 @@ function setupTerminals() {
 
         geminiTerminal.open(geminiContainer);
 
-        // Log container dimensions
-        const geminiRect = geminiContainer.getBoundingClientRect();
-        console.log('Gemini container dimensions:', geminiRect.width, 'x', geminiRect.height);
-
         // Write initial message
-        geminiTerminal.write('\x1b[36mGemini CLI Terminal\x1b[0m\r\n');
-        geminiTerminal.write('Connecting to Gemini...\r\n\r\n');
+        geminiTerminal.write('\x1b[36m┌─────────────────────────────────────┐\x1b[0m\r\n');
+        geminiTerminal.write('\x1b[36m│  Gemini CLI Terminal                │\x1b[0m\r\n');
+        geminiTerminal.write('\x1b[36m│  Initializing...                    │\x1b[0m\r\n');
+        geminiTerminal.write('\x1b[36m└─────────────────────────────────────┘\x1b[0m\r\n\r\n');
+
+        // Focus the terminal to make it interactive
+        geminiTerminal.focus();
 
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
             geminiFitAddon.fit();
             console.log('Gemini terminal fitted:', geminiTerminal.cols, 'x', geminiTerminal.rows);
-            const xtermElement = geminiContainer.querySelector('.xterm');
-            if (xtermElement) {
-                const xtermRect = xtermElement.getBoundingClientRect();
-                console.log('Gemini xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
-            }
+            geminiTerminal.focus();
         }, 100);
 
         // Handle Gemini terminal input
@@ -160,7 +121,12 @@ function setupTerminals() {
             }
         });
 
-        // Setup SSH terminal
+        // Focus Gemini terminal when clicked
+        geminiContainer.addEventListener('click', () => {
+            geminiTerminal.focus();
+        });
+
+        // Setup SSH terminal (initially hidden behind form)
         console.log('Creating SSH terminal...');
         sshTerminal = new Terminal({
             cursorBlink: true,
@@ -185,23 +151,10 @@ function setupTerminals() {
 
         sshTerminal.open(sshContainer);
 
-        // Log container dimensions
-        const sshRect = sshContainer.getBoundingClientRect();
-        console.log('SSH container dimensions:', sshRect.width, 'x', sshRect.height);
-
-        // Write initial message
-        sshTerminal.write('\x1b[32mSSH Terminal\x1b[0m\r\n');
-        sshTerminal.write('Connecting to SSH server...\r\n\r\n');
-
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
             sshFitAddon.fit();
             console.log('SSH terminal fitted:', sshTerminal.cols, 'x', sshTerminal.rows);
-            const xtermElement = sshContainer.querySelector('.xterm');
-            if (xtermElement) {
-                const xtermRect = xtermElement.getBoundingClientRect();
-                console.log('SSH xterm element dimensions:', xtermRect.width, 'x', xtermRect.height);
-            }
         }, 100);
 
         // Handle SSH terminal input
@@ -214,16 +167,21 @@ function setupTerminals() {
             }
         });
 
+        // Focus SSH terminal when clicked
+        sshContainer.addEventListener('click', () => {
+            if (sshConnected) {
+                sshTerminal.focus();
+            }
+        });
+
         // Handle window resize for both terminals
         window.addEventListener('resize', () => {
             console.log('Window resized, refitting terminals...');
             if (geminiFitAddon) {
                 geminiFitAddon.fit();
-                console.log('Gemini refitted:', geminiTerminal.cols, 'x', geminiTerminal.rows);
             }
             if (sshFitAddon) {
                 sshFitAddon.fit();
-                console.log('SSH refitted:', sshTerminal.cols, 'x', sshTerminal.rows);
             }
 
             if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
@@ -250,17 +208,16 @@ function setupTerminals() {
     }
 }
 
-// Setup WebSocket connections
-function connectWebSockets() {
+// Connect Gemini WebSocket
+function connectGeminiWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
 
-    // Connect Gemini terminal WebSocket
     geminiTerminalWs = new WebSocket(`${protocol}//${host}/ws/gemini-terminal/${sessionId}`);
 
     geminiTerminalWs.onopen = () => {
         console.log('Gemini terminal WebSocket connected');
-        geminiTerminal.write('\x1b[32m✓ Gemini CLI connected\x1b[0m\r\n');
+        geminiTerminal.write('\x1b[32m✓ Connected to Gemini CLI\x1b[0m\r\n\r\n');
     };
 
     geminiTerminalWs.onmessage = (event) => {
@@ -280,33 +237,6 @@ function connectWebSockets() {
     geminiTerminalWs.onclose = () => {
         console.log('Gemini terminal WebSocket closed');
         geminiTerminal.write('\x1b[33m✗ Connection closed\x1b[0m\r\n');
-    };
-
-    // Connect SSH terminal WebSocket
-    sshTerminalWs = new WebSocket(`${protocol}//${host}/ws/ssh-terminal/${sessionId}`);
-
-    sshTerminalWs.onopen = () => {
-        console.log('SSH terminal WebSocket connected');
-        sshTerminal.write('\x1b[32m✓ SSH terminal connected\x1b[0m\r\n');
-    };
-
-    sshTerminalWs.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        if (message.type === 'output') {
-            sshTerminal.write(message.data);
-        } else if (message.type === 'error') {
-            sshTerminal.write(`\x1b[31mError: ${message.message}\x1b[0m\r\n`);
-        }
-    };
-
-    sshTerminalWs.onerror = (error) => {
-        console.error('SSH terminal WebSocket error:', error);
-        sshTerminal.write('\x1b[31m✗ Connection error\x1b[0m\r\n');
-    };
-
-    sshTerminalWs.onclose = () => {
-        console.log('SSH terminal WebSocket closed');
-        sshTerminal.write('\x1b[33m✗ Connection closed\x1b[0m\r\n');
     };
 
     // Connect command approval WebSocket
@@ -330,6 +260,139 @@ function connectWebSockets() {
     commandApprovalWs.onclose = () => {
         console.log('Command approval WebSocket closed');
     };
+}
+
+// Setup SSH connection form
+function setupSSHForm() {
+    const form = document.getElementById('ssh-form');
+    const disconnectBtn = document.getElementById('disconnect-ssh-btn');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const formData = {
+            host: document.getElementById('host').value,
+            port: parseInt(document.getElementById('port').value),
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value || null,
+            private_key: document.getElementById('private-key').value || null,
+        };
+
+        try {
+            // Connect SSH
+            const sshResponse = await fetch('/api/ssh/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData),
+            });
+
+            const sshResult = await sshResponse.json();
+
+            if (sshResult.success) {
+                // SSH connected successfully
+                sessionId = sshResult.session_id;
+                sshConnected = true;
+
+                // Hide the form
+                document.getElementById('ssh-connection-form').style.display = 'none';
+
+                // Update status
+                updateSSHStatus('connected');
+
+                // Connect SSH WebSocket
+                connectSSHWebSocket();
+
+                // Show disconnect button
+                disconnectBtn.style.display = 'block';
+
+                // Focus SSH terminal
+                sshTerminal.focus();
+            } else {
+                showSSHError(sshResult.error || 'SSH connection failed');
+            }
+        } catch (error) {
+            showSSHError('Failed to connect: ' + error.message);
+        }
+    });
+
+    disconnectBtn.addEventListener('click', () => {
+        disconnectSSH();
+    });
+}
+
+// Connect SSH WebSocket
+function connectSSHWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+
+    sshTerminalWs = new WebSocket(`${protocol}//${host}/ws/ssh-terminal/${sessionId}`);
+
+    sshTerminalWs.onopen = () => {
+        console.log('SSH terminal WebSocket connected');
+        sshTerminal.write('\x1b[32m✓ SSH connection established\x1b[0m\r\n\r\n');
+    };
+
+    sshTerminalWs.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'output') {
+            sshTerminal.write(message.data);
+        } else if (message.type === 'error') {
+            sshTerminal.write(`\x1b[31mError: ${message.message}\x1b[0m\r\n`);
+        }
+    };
+
+    sshTerminalWs.onerror = (error) => {
+        console.error('SSH terminal WebSocket error:', error);
+        sshTerminal.write('\x1b[31m✗ Connection error\x1b[0m\r\n');
+    };
+
+    sshTerminalWs.onclose = () => {
+        console.log('SSH terminal WebSocket closed');
+        sshTerminal.write('\x1b[33m✗ SSH connection closed\x1b[0m\r\n\r\n');
+        sshConnected = false;
+        updateSSHStatus('disconnected');
+        // Show the form again
+        document.getElementById('ssh-connection-form').style.display = 'flex';
+        document.getElementById('disconnect-ssh-btn').style.display = 'none';
+    };
+}
+
+// Disconnect SSH
+function disconnectSSH() {
+    if (sshTerminalWs) {
+        sshTerminalWs.close();
+    }
+    sshConnected = false;
+    sshTerminal.clear();
+    updateSSHStatus('disconnected');
+    document.getElementById('ssh-connection-form').style.display = 'flex';
+    document.getElementById('disconnect-ssh-btn').style.display = 'none';
+}
+
+// Update SSH status badge
+function updateSSHStatus(status) {
+    const statusBadge = document.getElementById('ssh-status');
+    if (status === 'connected') {
+        statusBadge.textContent = 'SSH: Connected';
+        statusBadge.className = 'status-badge connected';
+    } else {
+        statusBadge.textContent = 'SSH: Disconnected';
+        statusBadge.className = 'status-badge disconnected';
+    }
+}
+
+// Show SSH error
+function showSSHError(message) {
+    const errorDiv = document.getElementById('ssh-error');
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+
+    // Hide error after 5 seconds
+    setTimeout(() => {
+        errorDiv.style.display = 'none';
+    }, 5000);
 }
 
 // Command approval system
@@ -360,24 +423,6 @@ function approveCommand(approved) {
 
     document.getElementById('command-approval-modal').style.display = 'none';
     pendingCommand = null;
-}
-
-// Setup disconnect functionality
-function setupDisconnect() {
-    document.getElementById('disconnect-btn').addEventListener('click', () => {
-        if (geminiTerminalWs) geminiTerminalWs.close();
-        if (sshTerminalWs) sshTerminalWs.close();
-        if (commandApprovalWs) commandApprovalWs.close();
-        if (geminiTerminal) geminiTerminal.dispose();
-        if (sshTerminal) sshTerminal.dispose();
-
-        document.getElementById('app-container').style.display = 'none';
-        document.getElementById('connection-modal').style.display = 'flex';
-
-        // Reset form
-        document.getElementById('ssh-form').reset();
-        document.getElementById('connection-error').style.display = 'none';
-    });
 }
 
 // Setup pane resizer
