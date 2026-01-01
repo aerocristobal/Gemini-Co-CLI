@@ -5,6 +5,7 @@ FROM rust:1.83-slim as builder
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -23,11 +24,18 @@ RUN cargo build --release
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies including Python for Gemini CLI
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Gemini CLI globally
+RUN pip3 install --break-system-packages google-generativeai-cli
 
 # Create app directory
 WORKDIR /app
@@ -44,5 +52,9 @@ EXPOSE 3000
 # Set environment variables
 ENV RUST_LOG=info
 
-# Run the application
+# Note: Users must authenticate Gemini CLI before running:
+# docker run -it <image> gemini auth login
+# Then run the application:
+# CMD ["./gemini-co-cli"]
+
 CMD ["./gemini-co-cli"]
