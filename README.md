@@ -12,6 +12,7 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 - **Real-time Communication**: WebSocket-based bidirectional communication between Gemini and the terminal
 - **Containerized Deployment**: Easy deployment with Docker
 - **Secure SSH Connections**: Support for both password and SSH key authentication
+- **Flexible Authentication**: Support for both API key and OAuth authentication
 
 ## Architecture
 
@@ -44,10 +45,12 @@ A containerized web application that provides a Google Gemini Canvas-like interf
 
 - Docker and Docker Compose (for containerized deployment)
 - OR Rust 1.83+ (for local development)
-- Google Gemini CLI installed and authenticated (see setup below)
+- Google Gemini API key OR Google account for OAuth (see setup below)
 - SSH access to a remote server
 
 ## Quick Start with Docker
+
+### Option 1: API Key Authentication (Recommended)
 
 1. Clone the repository:
    ```bash
@@ -55,28 +58,48 @@ A containerized web application that provides a Google Gemini Canvas-like interf
    cd gemini-co-cli
    ```
 
-2. Build the Docker image:
+2. Get your Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+
+3. Build the Docker image:
    ```bash
    docker-compose build
    ```
 
-3. Authenticate with Google Gemini CLI (one-time setup):
+4. Authenticate with your API key (one-time setup):
    ```bash
-   docker-compose run gemini-co-cli gemini auth login
+   docker-compose run -e GOOGLE_API_KEY=your_api_key_here gemini-co-cli gemini auth login
    ```
-   Follow the prompts to authenticate with your Google account. Your credentials will be stored in a Docker volume for future use.
+   Your API key will be stored in a Docker volume for future use.
 
-4. Start the application:
+5. Start the application:
    ```bash
    docker-compose up
    ```
 
-5. Open your browser and navigate to:
+6. Open your browser and navigate to:
    ```
    http://localhost:3000
    ```
 
-6. Connect to your SSH server using the connection form.
+7. Connect to your SSH server using the connection form.
+
+### Option 2: OAuth Authentication (Advanced)
+
+1-3. Same as above
+
+4. Set up OAuth credentials:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create OAuth 2.0 credentials for a Desktop application
+   - Download the credentials.json file
+   - The container will guide you through the OAuth flow
+
+5. Authenticate (one-time setup):
+   ```bash
+   docker-compose run gemini-co-cli gemini auth login
+   ```
+   Follow the browser prompts to authenticate with your Google account.
+
+6-7. Same as Option 1
 
 ## Local Development
 
@@ -85,21 +108,31 @@ A containerized web application that provides a Google Gemini Canvas-like interf
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
-2. Install Google Gemini CLI:
+2. Install Python dependencies:
    ```bash
-   pip install google-generativeai-cli
+   pip install google-generativeai google-auth-oauthlib
    ```
 
-3. Authenticate with Gemini CLI (one-time setup):
-   ```bash
-   gemini auth login
-   ```
-   Follow the prompts to authenticate with your Google account.
-
-4. Clone and setup:
+3. Clone the repository:
    ```bash
    git clone https://github.com/yourusername/gemini-co-cli.git
    cd gemini-co-cli
+   ```
+
+4. Authenticate with Gemini (one-time setup):
+
+   **Option A - API Key (Recommended):**
+   ```bash
+   export GOOGLE_API_KEY=your_api_key_here
+   python3 scripts/gemini-cli.py auth login
+   ```
+
+   **Option B - OAuth (Advanced):**
+   - Set up OAuth credentials as described above
+   - Place credentials.json in `~/.config/gemini-co-cli/`
+   - Run:
+   ```bash
+   python3 scripts/gemini-cli.py auth login
    ```
 
 5. Run the application:
@@ -153,17 +186,27 @@ Once connected, you can:
 ### Environment Variables
 
 - `RUST_LOG`: Logging level (optional, default: `gemini_co_cli=debug,tower_http=debug`)
+- `GOOGLE_API_KEY`: Your Google Gemini API key (optional, for API key authentication)
 
 ### Gemini Authentication
 
-The application uses the Google Gemini CLI for authentication instead of API keys. Benefits:
-- No need to manage API keys
-- OAuth-based authentication with your Google account
-- Credentials stored securely by the Gemini CLI
+The application provides two authentication methods:
 
-**Docker:** Authentication credentials are persisted in a Docker volume named `gemini-config`.
+**1. API Key (Recommended)**
+- Get a key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+- Set `GOOGLE_API_KEY` environment variable
+- Run `gemini auth login` to store the key
+- Simpler setup, good for development and personal use
 
-**Local:** Authentication credentials are stored in `~/.config/google-generativeai/`.
+**2. OAuth (Advanced)**
+- Set up OAuth 2.0 credentials in Google Cloud Console
+- Authenticate with your Google account
+- Supports automatic token refresh
+- Better for production or shared environments
+
+**Storage:**
+- Docker: Credentials stored in `gemini-config` volume
+- Local: Credentials stored in `~/.config/gemini-co-cli/`
 
 ### Port Configuration
 
@@ -184,6 +227,7 @@ By default, the application runs on port 3000. To change this:
 
 - **SSH Credentials**: Credentials are only stored in memory during active sessions
 - **Gemini Authentication**: OAuth credentials managed securely by Google Gemini CLI
+- **API Keys**: If using API key auth, keep your key secure and never commit to version control
 - **Command Approval**: Always review commands before approval
 - **HTTPS**: For production, use a reverse proxy (nginx, traefik) with SSL/TLS
 - **Server Key Verification**: Currently accepts all server keys (modify `src/ssh.rs` for stricter verification)
@@ -206,10 +250,12 @@ By default, the application runs on port 3000. To change this:
 ### Gemini Issues
 
 - **Gemini not responding**:
-  - Verify you've authenticated: `gemini auth login` (local) or `docker-compose run gemini-co-cli gemini auth login` (Docker)
-  - Check Gemini CLI is installed: `gemini --version`
-  - Review browser console for WebSocket errors
-  - Check application logs for Gemini CLI errors
+  - Verify authentication: `gemini auth status`
+  - Docker: `docker-compose run gemini-co-cli gemini auth status`
+  - Local: `python3 scripts/gemini-cli.py auth status`
+  - Check if GOOGLE_API_KEY is set (for API key auth)
+  - Review application logs for errors
+  - Ensure Python packages are installed: `pip list | grep google-generativeai`
 
 - **Commands not executing**:
   - Ensure you approved the command
@@ -226,8 +272,10 @@ gemini-co-cli/
 │   ├── main.rs           # Application entry point
 │   ├── state.rs          # Session and state management
 │   ├── ssh.rs            # SSH client implementation
-│   ├── gemini.rs         # Gemini API client
+│   ├── gemini.rs         # Gemini CLI wrapper
 │   └── websocket.rs      # WebSocket handlers
+├── scripts/
+│   └── gemini-cli.py     # Python CLI wrapper for Gemini API
 ├── static/
 │   ├── index.html        # Frontend HTML
 │   ├── style.css         # Styling
@@ -241,7 +289,7 @@ gemini-co-cli/
 
 To extend functionality:
 
-1. **New Gemini Commands**: Modify `src/gemini.rs` to parse additional command formats
+1. **New Gemini Commands**: Modify `scripts/gemini-cli.py` to add new CLI commands
 2. **Enhanced Terminal**: Add features in `static/app.js` using xterm.js addons
 3. **Additional APIs**: Create new modules in `src/` and register routes in `main.rs`
 
@@ -272,6 +320,7 @@ Contributions are welcome! Please:
 - Terminal powered by [xterm.js](https://xtermjs.org/)
 - SSH via [russh](https://github.com/warp-tech/russh)
 - AI by [Google Gemini](https://deepmind.google/technologies/gemini/)
+- Python SDK: [google-generativeai](https://github.com/google/generative-ai-python)
 
 ## Support
 

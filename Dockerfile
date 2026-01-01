@@ -34,8 +34,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Gemini CLI globally
-RUN pip3 install --break-system-packages google-generativeai-cli
+# Install Google Generative AI SDK
+RUN pip3 install --break-system-packages google-generativeai google-auth-oauthlib
 
 # Create app directory
 WORKDIR /app
@@ -46,15 +46,23 @@ COPY --from=builder /app/target/release/gemini-co-cli .
 # Copy static files
 COPY --from=builder /app/static ./static
 
+# Copy and install Gemini CLI wrapper
+COPY scripts/gemini-cli.py /usr/local/bin/gemini-cli.py
+RUN chmod +x /usr/local/bin/gemini-cli.py && \
+    ln -s /usr/local/bin/gemini-cli.py /usr/local/bin/gemini
+
 # Expose port
 EXPOSE 3000
 
 # Set environment variables
 ENV RUST_LOG=info
+ENV PATH="/usr/local/bin:${PATH}"
 
 # Note: Users must authenticate Gemini CLI before running:
-# docker run -it <image> gemini auth login
-# Then run the application:
-# CMD ["./gemini-co-cli"]
+# Option 1 - API Key (simpler):
+#   docker run -e GOOGLE_API_KEY=your_key <image> gemini auth login
+# Option 2 - OAuth (more secure):
+#   Place credentials.json in ~/.config/gemini-co-cli/ and run:
+#   docker run -it <image> gemini auth login
 
 CMD ["./gemini-co-cli"]
