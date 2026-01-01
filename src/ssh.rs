@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use russh::client::{self, Handle};
 use russh::keys::*;
 use russh::*;
+use std::io::Cursor;
 use std::sync::Arc;
 
 pub struct SshConfig {
@@ -20,13 +21,15 @@ pub struct SshSession {
 
 struct Client;
 
-#[async_trait::async_trait]
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _server_public_key: &key::PublicKey) -> Result<bool, Self::Error> {
+    fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::PublicKey,
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         // In production, you should verify the server key properly
-        Ok(true)
+        async { Ok(true) }
     }
 }
 
@@ -99,9 +102,8 @@ impl SshSession {
 
     /// Send raw input to the SSH terminal (for user keystrokes)
     pub async fn send_input(&mut self, data: String) -> Result<()> {
-        let bytes = data.as_bytes();
         self.channel
-            .data(bytes)
+            .data(Cursor::new(data.into_bytes()))
             .await
             .map_err(|_| anyhow::anyhow!("Failed to send input"))?;
         Ok(())
@@ -110,9 +112,8 @@ impl SshSession {
     /// Execute a complete command (adds newline automatically)
     pub async fn execute_command(&mut self, command: String) -> Result<()> {
         let cmd_with_newline = format!("{}\n", command);
-        let bytes = cmd_with_newline.as_bytes();
         self.channel
-            .data(bytes)
+            .data(Cursor::new(cmd_with_newline.into_bytes()))
             .await
             .map_err(|_| anyhow::anyhow!("Failed to send command"))?;
         Ok(())
