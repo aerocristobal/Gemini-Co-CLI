@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Co-CLI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="connection-modal" class="modal">
+        <div class="modal-content">
+            <h2>Connect to SSH Server</h2>
+            <form id="ssh-form">
+                <div class="form-group">
+                    <label for="host">Host:</label>
+                    <input type="text" id="host" name="host" required placeholder="example.com">
+                </div>
+                <div class="form-group">
+                    <label for="port">Port:</label>
+                    <input type="number" id="port" name="port" value="22" required>
+                </div>
+                <div class="form-group">
+                    <label for="username">Username:</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" name="password" placeholder="Leave empty if using key">
+                </div>
+                <div class="form-group">
+                    <label for="private-key">Private Key (optional):</label>
+                    <textarea id="private-key" name="private-key" rows="4" placeholder="Paste private key here"></textarea>
+                </div>
+                <div id="connection-error" class="error" style="display: none;"></div>
+                <button type="submit" class="btn-primary">Connect</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="app-container" style="display: none;">
+        <div class="header">
+            <h1>🤖 Gemini Co-CLI</h1>
+            <div class="header-info">
+                <span id="connection-status">Connected</span>
+                <button id="disconnect-btn" class="btn-secondary">Disconnect</button>
+            </div>
+        </div>
+
+        <div class="split-container">
+            <div class="pane gemini-pane">
+                <div class="pane-header">
+                    <h2>💬 Gemini Assistant</h2>
+                </div>
+                <div id="gemini-chat" class="chat-container"></div>
+                <div class="input-container">
+                    <textarea id="gemini-input" placeholder="Ask Gemini anything about your terminal..." rows="3"></textarea>
+                    <button id="send-btn" class="btn-primary">Send</button>
+                </div>
+            </div>
+
+            <div class="resizer"></div>
+
+            <div class="pane terminal-pane">
+                <div class="pane-header">
+                    <h2>💻 Terminal</h2>
+                </div>
+                <div id="terminal"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="command-approval-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>⚠️ Command Approval Required</h2>
+            <p>Gemini wants to execute the following command:</p>
+            <pre id="command-preview" class="command-preview"></pre>
+            <p>Do you want to allow this?</p>
+            <div class="modal-actions">
+                <button id="approve-btn" class="btn-primary">Approve & Execute</button>
+                <button id="reject-btn" class="btn-secondary">Reject</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
