@@ -8,8 +8,8 @@ use axum::{
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
@@ -139,8 +139,8 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
-    // Spawn Gemini CLI process
-    let mut gemini = match GeminiTerminal::spawn().await {
+    // Spawn Gemini CLI process with PTY
+    let mut gemini = match GeminiTerminal::spawn() {
         Ok(g) => g,
         Err(e) => {
             tracing::error!("Failed to spawn Gemini CLI: {}", e);
@@ -151,71 +151,96 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
     let (ws_sender, mut ws_receiver) = socket.split();
     let ws_sender = Arc::new(Mutex::new(ws_sender));
 
-    // Get handles to Gemini process (take ownership)
-    let mut stdin = gemini.stdin().expect("Failed to get stdin");
-    let stdout = gemini.stdout().expect("Failed to get stdout");
-    let stderr = gemini.stderr().expect("Failed to get stderr");
+    // Get PTY reader and writer
+    let mut reader = gemini.get_reader();
+    let mut writer = gemini.take_writer();
 
     // Channel for command requests from Gemini
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
 
-    // Task to read from Gemini stdout and send to WebSocket
+    // Task to read from PTY and send to WebSocket
     let ws_sender_clone = ws_sender.clone();
-    let mut stdout_task = tokio::spawn(async move {
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
+    let mut output_task = tokio::task::spawn_blocking(move || {
+        let mut buffer = vec![0u8; 4096];
+        let mut line_buffer = String::new();
 
-        while let Ok(Some(line)) = lines.next_line().await {
-            // Check for EXECUTE commands
-            if let Some(command) = extract_command(&line) {
-                tracing::info!("Gemini suggested command: {}", command);
-                let _ = cmd_tx.send(command);
-            }
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(n) if n > 0 => {
+                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
 
-            // Send output to WebSocket
-            let msg = TerminalMessage::Output { data: line + "\r\n" };
-            let json = serde_json::to_string(&msg).unwrap();
-            let mut sender = ws_sender_clone.lock().await;
-            if sender.send(Message::Text(json)).await.is_err() {
-                break;
-            }
-        }
-    });
+                    // Accumulate output for command detection
+                    line_buffer.push_str(&output);
 
-    // Task to read from Gemini stderr and send to WebSocket
-    let ws_sender_clone = ws_sender.clone();
-    let mut stderr_task = tokio::spawn(async move {
-        let reader = BufReader::new(stderr);
-        let mut lines = reader.lines();
+                    // Check for EXECUTE commands in accumulated buffer
+                    if let Some(command) = extract_command(&line_buffer) {
+                        tracing::info!("Gemini suggested command: {}", command);
+                        let _ = cmd_tx.send(command);
+                    }
 
-        while let Ok(Some(line)) = lines.next_line().await {
-            let msg = TerminalMessage::Error {
-                message: line.clone(),
-            };
-            let json = serde_json::to_string(&msg).unwrap();
-            let mut sender = ws_sender_clone.lock().await;
-            if sender.send(Message::Text(json)).await.is_err() {
-                break;
-            }
-        }
-    });
+                    // Keep only last 1000 chars to avoid unbounded growth
+                    if line_buffer.len() > 1000 {
+                        line_buffer = line_buffer.chars().skip(line_buffer.len() - 1000).collect();
+                    }
 
-    // Task to handle WebSocket input and send to Gemini stdin
-    let mut stdin_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_receiver.next().await {
-            if let Message::Text(text) = msg {
-                if let Ok(terminal_msg) = serde_json::from_str::<TerminalMessage>(&text) {
-                    match terminal_msg {
-                        TerminalMessage::Input { data } => {
-                            if let Err(e) = stdin.write_all(data.as_bytes()).await {
-                                tracing::error!("Error writing to Gemini stdin: {}", e);
-                                break;
-                            }
-                            let _ = stdin.flush().await;
-                        }
-                        _ => {}
+                    // Send output to WebSocket
+                    let msg = TerminalMessage::Output { data: output };
+                    let json = serde_json::to_string(&msg).unwrap();
+
+                    // Use blocking channel to send to async task
+                    let rt = tokio::runtime::Handle::current();
+                    let sender = ws_sender_clone.clone();
+                    if rt.block_on(async {
+                        let mut s = sender.lock().await;
+                        s.send(Message::Text(json)).await
+                    }).is_err() {
+                        break;
                     }
                 }
+                Ok(_) => break, // EOF
+                Err(e) => {
+                    tracing::error!("Error reading from PTY: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Task to handle WebSocket input and send to PTY
+    let mut input_task = tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Handle::current();
+
+        loop {
+            // Receive from WebSocket in async context
+            let msg_opt = rt.block_on(async {
+                ws_receiver.next().await
+            });
+
+            match msg_opt {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(terminal_msg) = serde_json::from_str::<TerminalMessage>(&text) {
+                        match terminal_msg {
+                            TerminalMessage::Input { data } => {
+                                if let Err(e) = writer.write_all(data.as_bytes()) {
+                                    tracing::error!("Error writing to PTY: {}", e);
+                                    break;
+                                }
+                                let _ = writer.flush();
+                            }
+                            TerminalMessage::Resize { width, height } => {
+                                // Handle resize if needed
+                                tracing::debug!("Resize request: {}x{}", width, height);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(e)) => {
+                    tracing::error!("WebSocket error: {}", e);
+                    break;
+                }
+                _ => {}
             }
         }
     });
@@ -228,38 +253,24 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
             let cmd_id = session_clone.add_pending_command(command.clone()).await;
 
             tracing::info!("Command pending approval: {} (ID: {})", command, cmd_id);
-
-            // In a real implementation, we'd wait for approval through another WebSocket message
-            // For now, commands need to be approved via the command approval WebSocket
         }
     });
 
     // Wait for tasks to complete
     tokio::select! {
-        _ = &mut stdout_task => {
-            stderr_task.abort();
-            stdin_task.abort();
+        _ = &mut output_task => {
+            input_task.abort();
             cmd_task.abort();
         }
-        _ = &mut stderr_task => {
-            stdout_task.abort();
-            stdin_task.abort();
-            cmd_task.abort();
-        }
-        _ = &mut stdin_task => {
-            stdout_task.abort();
-            stderr_task.abort();
+        _ = &mut input_task => {
+            output_task.abort();
             cmd_task.abort();
         }
         _ = &mut cmd_task => {
-            stdout_task.abort();
-            stderr_task.abort();
-            stdin_task.abort();
+            output_task.abort();
+            input_task.abort();
         }
     };
-
-    // Clean up
-    let _ = gemini.kill().await;
 }
 
 /// Handle SSH terminal WebSocket connection
