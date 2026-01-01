@@ -1,0 +1,154 @@
+use anyhow::{Context, Result};
+use russh::client::{self, Handle};
+use russh::keys::*;
+use russh::*;
+use std::sync::Arc;
+
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+}
+
+pub struct SshSession {
+    #[allow(dead_code)]
+    handle: Handle<Client>,
+    channel: Channel<client::Msg>,
+}
+
+struct Client;
+
+#[async_trait::async_trait]
+impl client::Handler for Client {
+    type Error = russh::Error;
+
+    async fn check_server_key(&mut self, _server_public_key: &key::PublicKey) -> Result<bool, Self::Error> {
+        // In production, you should verify the server key properly
+        Ok(true)
+    }
+}
+
+impl SshSession {
+    pub async fn connect(config: SshConfig) -> Result<Self> {
+        let client_config = client::Config {
+            inactivity_timeout: Some(std::time::Duration::from_secs(300)),
+            ..<_>::default()
+        };
+
+        let client_config = Arc::new(client_config);
+        let mut session = client::connect(
+            client_config,
+            (config.host.as_str(), config.port),
+            Client,
+        )
+        .await
+        .context("Failed to connect to SSH server")?;
+
+        // Authenticate
+        let auth_result = if let Some(password) = config.password {
+            session
+                .authenticate_password(config.username.clone(), password)
+                .await
+                .context("Failed to authenticate with password")?
+        } else if let Some(key_data) = config.private_key {
+            let key = decode_secret_key(&key_data, None)
+                .context("Failed to decode private key")?;
+            session
+                .authenticate_publickey(config.username.clone(), Arc::new(key))
+                .await
+                .context("Failed to authenticate with public key")?
+        } else {
+            return Err(anyhow::anyhow!("No authentication method provided"));
+        };
+
+        if !auth_result {
+            return Err(anyhow::anyhow!("Authentication failed"));
+        }
+
+        // Open a channel with PTY
+        let channel = session
+            .channel_open_session()
+            .await
+            .context("Failed to open channel")?;
+
+        channel
+            .request_pty(
+                false,
+                "xterm",
+                80,
+                24,
+                0,
+                0,
+                &[], //pty modes
+            )
+            .await
+            .context("Failed to request PTY")?;
+
+        channel
+            .request_shell(false)
+            .await
+            .context("Failed to request shell")?;
+
+        Ok(Self {
+            handle: session,
+            channel,
+        })
+    }
+
+    pub async fn execute_command(&mut self, command: String) -> Result<()> {
+        let cmd_with_newline = format!("{}\n", command);
+        let bytes = cmd_with_newline.as_bytes();
+        self.channel
+            .data(bytes)
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send command"))?;
+        Ok(())
+    }
+
+    pub async fn read_output(&mut self) -> Result<Option<String>> {
+        // Check if there's any message from the channel
+        if let Some(msg) = self.channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    let output = String::from_utf8_lossy(&data).to_string();
+                    Ok(Some(output))
+                }
+                ChannelMsg::ExtendedData { data, ext: _ } => {
+                    let output = String::from_utf8_lossy(&data).to_string();
+                    Ok(Some(output))
+                }
+                ChannelMsg::Eof => Ok(None),
+                ChannelMsg::ExitStatus { exit_status } => {
+                    tracing::info!("Command exited with status: {}", exit_status);
+                    Ok(None)
+                }
+                _ => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn resize(&mut self, width: u32, height: u32) -> Result<()> {
+        self.channel
+            .window_change(width, height, 0, 0)
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to resize terminal"))?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn close(self) -> Result<()> {
+        self.channel
+            .eof()
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to close channel"))?;
+        self.handle
+            .disconnect(Disconnect::ByApplication, "", "English")
+            .await
+            .context("Failed to disconnect")?;
+        Ok(())
+    }
+}
