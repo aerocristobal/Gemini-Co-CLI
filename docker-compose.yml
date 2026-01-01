@@ -7,12 +7,14 @@ services:
       - "3000:3000"
     environment:
       - RUST_LOG=gemini_co_cli=debug,tower_http=debug
+      # Option 1: Use API key (uncomment and set your key)
+      # - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Option 2: Use OAuth (default - requires running 'gemini auth login' first)
     restart: unless-stopped
     volumes:
       - ./static:/app/static:ro
       # Mount Gemini CLI config directory for persistent auth
-      # Run 'docker-compose run gemini-co-cli gemini auth login' first to authenticate
-      - gemini-config:/root/.config/google-generativeai
+      - gemini-config:/root/.config/gemini-co-cli
 
 volumes:
   gemini-config:
