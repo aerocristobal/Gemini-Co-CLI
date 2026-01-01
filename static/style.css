@@ -154,6 +154,7 @@ body {
     flex-direction: column;
     background: #1a1a1a;
     overflow: hidden;
+    height: 100%;
 }
 
 .gemini-pane {
@@ -249,10 +250,19 @@ body {
 #gemini-terminal,
 #ssh-terminal {
     flex: 1;
-    padding: 1rem;
+    padding: 0.5rem;
     overflow: hidden;
-    min-height: 400px;
     position: relative;
+    height: 100%;
+    /* Debug: show container boundaries */
+    background: #0a0a0a;
+}
+
+/* Ensure xterm.js terminal fills container */
+#gemini-terminal .xterm,
+#ssh-terminal .xterm {
+    height: 100%;
+    width: 100%;
 }
 
 .command-preview {

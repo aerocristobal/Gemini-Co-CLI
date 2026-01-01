@@ -131,6 +131,10 @@ function setupTerminals() {
 
         geminiTerminal.open(geminiContainer);
 
+        // Write initial message
+        geminiTerminal.write('\x1b[36mGemini CLI Terminal\x1b[0m\r\n');
+        geminiTerminal.write('Connecting to Gemini...\r\n\r\n');
+
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
             geminiFitAddon.fit();
@@ -171,6 +175,10 @@ function setupTerminals() {
         }
 
         sshTerminal.open(sshContainer);
+
+        // Write initial message
+        sshTerminal.write('\x1b[32mSSH Terminal\x1b[0m\r\n');
+        sshTerminal.write('Connecting to SSH server...\r\n\r\n');
 
         // Fit after a short delay to ensure DOM is ready
         setTimeout(() => {
