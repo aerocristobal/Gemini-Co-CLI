@@ -154,6 +154,22 @@ impl ApprovalChannel {
         pending.remove(&id);
     }
 
+    /// Broadcast a rejection event (e.g., on timeout).
+    ///
+    /// Called when an approval times out to notify frontends.
+    pub async fn broadcast_rejection(&self, approval_id: Uuid) {
+        // Remove from pending
+        {
+            let mut pending = self.pending.lock().await;
+            pending.remove(&approval_id);
+        }
+
+        // Broadcast rejection event
+        let _ = self.event_tx.send(ApprovalEvent::CommandRejected {
+            approval_id: approval_id.to_string(),
+        });
+    }
+
     /// Get the number of pending approvals.
     pub async fn pending_count(&self) -> usize {
         self.pending.lock().await.len()

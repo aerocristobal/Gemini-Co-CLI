@@ -12,7 +12,10 @@ pub struct GeminiTerminal {
 
 impl GeminiTerminal {
     /// Spawn a new interactive Gemini CLI process with PTY
-    pub fn spawn() -> Result<Self> {
+    ///
+    /// # Arguments
+    /// * `session_api_key` - Optional per-session API key from web authentication
+    pub fn spawn(session_api_key: Option<String>) -> Result<Self> {
         let pty_system = portable_pty::native_pty_system();
 
         // Create a PTY with initial size
@@ -28,18 +31,45 @@ impl GeminiTerminal {
         // Build command to run gemini CLI
         let mut cmd = CommandBuilder::new("gemini");
 
-        // Ensure environment variables are passed through
-        // This is critical for GEMINI_API_KEY authentication
-        if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
-            cmd.env("GEMINI_API_KEY", api_key);
-            tracing::info!("Gemini CLI starting with API key authentication");
+        // Set terminal type for proper PTY operation
+        if let Ok(term) = std::env::var("TERM") {
+            cmd.env("TERM", term);
         } else {
-            tracing::warn!("GEMINI_API_KEY not set - Gemini CLI may require authentication");
+            cmd.env("TERM", "xterm-256color");
+        }
+
+        // Priority for API key: session key > environment variable
+        // This allows per-session authentication from the web UI
+        if let Some(ref key) = session_api_key {
+            if !key.is_empty() {
+                cmd.env("GEMINI_API_KEY", key);
+                tracing::info!("Gemini CLI starting with per-session API key authentication");
+            }
+        } else if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+            if !api_key.is_empty() {
+                cmd.env("GEMINI_API_KEY", api_key);
+                tracing::info!("Gemini CLI starting with environment API key authentication");
+            } else {
+                tracing::info!("No API key provided - Gemini CLI will show interactive authentication");
+            }
+        } else {
+            tracing::info!("No API key provided - Gemini CLI will show interactive authentication");
         }
 
         // Pass through HOME for OAuth credential storage
         if let Ok(home) = std::env::var("HOME") {
-            cmd.env("HOME", home);
+            cmd.env("HOME", &home);
+            tracing::debug!("HOME directory set to: {}", home);
+        }
+
+        // Pass XDG config directory for Gemini CLI credentials
+        if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+            cmd.env("XDG_CONFIG_HOME", xdg_config);
+        }
+
+        // Pass PATH to ensure gemini CLI can find node and other dependencies
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", path);
         }
 
         // Spawn the process in the PTY
@@ -61,7 +91,18 @@ impl GeminiTerminal {
         let mut child = self.child.lock().await;
         match child.try_wait() {
             Ok(Some(status)) => {
-                tracing::warn!("Gemini CLI process exited with status: {:?}", status);
+                if status.success() {
+                    tracing::info!("Gemini CLI process exited successfully (exit code 0)");
+                } else {
+                    tracing::warn!(
+                        "Gemini CLI process exited with non-zero status: {:?}",
+                        status
+                    );
+                    tracing::warn!(
+                        "This usually means Gemini CLI needs authentication. \
+                        Set GEMINI_API_KEY or run 'docker-compose exec gemini-co-cli gemini' to authenticate via OAuth."
+                    );
+                }
                 false
             }
             Ok(None) => true, // Still running
@@ -73,20 +114,20 @@ impl GeminiTerminal {
     }
 
     /// Get reader for PTY output
-    pub fn get_reader(&self) -> Box<dyn Read + Send> {
-        let pty = self.pty_pair.blocking_lock();
+    pub async fn get_reader(&self) -> Box<dyn Read + Send> {
+        let pty = self.pty_pair.lock().await;
         pty.master.try_clone_reader().expect("Failed to clone reader")
     }
 
     /// Take writer for PTY input (can only be called once)
-    pub fn take_writer(&self) -> Box<dyn Write + Send> {
-        let pty = self.pty_pair.blocking_lock();
+    pub async fn take_writer(&self) -> Box<dyn Write + Send> {
+        let pty = self.pty_pair.lock().await;
         pty.master.take_writer().expect("Failed to take writer")
     }
 
     /// Resize the PTY
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        let pty = self.pty_pair.blocking_lock();
+    pub async fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        let pty = self.pty_pair.lock().await;
         pty.master
             .resize(PtySize {
                 rows,

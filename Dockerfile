@@ -1,5 +1,5 @@
-# Build stage
-FROM rust:1.83-slim AS builder
+# Build stage - use bookworm variant to match runtime glibc version
+FROM rust:slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

@@ -21,10 +21,12 @@ pub struct Session {
     pub mcp_service: Arc<McpSshService>,
     /// Channel to send SSH output to Gemini terminal
     pub ssh_to_gemini_tx: Option<Arc<Mutex<mpsc::UnboundedSender<String>>>>,
+    /// Optional per-session Gemini API key (for web-based authentication)
+    pub gemini_api_key: Option<String>,
 }
 
 impl Session {
-    pub fn new() -> Self {
+    pub fn new(gemini_api_key: Option<String>) -> Self {
         let id = Uuid::new_v4();
         let approval_channel = Arc::new(ApprovalChannel::new());
         let mcp_service = Arc::new(McpSshService::new(id, approval_channel.clone()));
@@ -36,6 +38,7 @@ impl Session {
             approval_channel,
             mcp_service,
             ssh_to_gemini_tx: None,
+            gemini_api_key,
         }
     }
 
@@ -98,8 +101,8 @@ impl AppState {
         }
     }
 
-    pub async fn create_session(&self) -> Session {
-        let session = Session::new();
+    pub async fn create_session(&self, gemini_api_key: Option<String>) -> Session {
+        let session = Session::new(gemini_api_key);
 
         // Register MCP service
         {

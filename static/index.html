@@ -18,49 +18,80 @@
         <div class="split-container">
             <div class="pane gemini-pane">
                 <div class="pane-header">
-                    <h2>🤖 Gemini CLI Terminal</h2>
+                    <h2>Gemini CLI Terminal</h2>
+                    <span id="gemini-status" class="status-badge disconnected">Not Connected</span>
                 </div>
-                <div id="gemini-terminal"></div>
+                <div class="pane-content">
+                    <div id="gemini-terminal"></div>
+
+                    <!-- Gemini Authentication Form (shown initially) -->
+                    <div id="gemini-auth-form" class="auth-form-container">
+                        <div class="form-wrapper">
+                            <h3>Gemini Authentication</h3>
+                            <p class="auth-description">Enter your API key to connect, or leave blank to use Google OAuth.</p>
+                            <form id="gemini-form">
+                                <div class="form-group">
+                                    <label for="api-key">API Key:</label>
+                                    <input type="password" id="api-key" name="api-key" placeholder="Enter your Gemini API key (optional)">
+                                    <small class="form-hint">
+                                        <a href="https://aistudio.google.com/apikey" target="_blank">Get an API key</a>
+                                    </small>
+                                </div>
+                                <div id="gemini-error" class="error" style="display: none;"></div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn-primary">Connect to Gemini</button>
+                                </div>
+                                <div class="auth-note">
+                                    <strong>No API key?</strong> Leave blank and use interactive Google OAuth in the terminal.
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="resizer"></div>
 
             <div class="pane terminal-pane">
                 <div class="pane-header">
-                    <h2>💻 SSH Terminal</h2>
+                    <h2>SSH Terminal</h2>
                 </div>
-                <div id="ssh-terminal"></div>
+                <div class="pane-content">
+                    <div id="ssh-terminal"></div>
 
-                <!-- SSH Connection Form (shown initially) -->
-                <div id="ssh-connection-form" class="ssh-form-container">
-                    <h3>Connect to SSH Server</h3>
-                    <form id="ssh-form">
-                        <div class="form-group">
-                            <label for="host">Host:</label>
-                            <input type="text" id="host" name="host" required placeholder="example.com">
+                    <!-- SSH Connection Form (shown initially) -->
+                    <div id="ssh-connection-form" class="ssh-form-container">
+                        <div class="form-wrapper">
+                            <h3>Connect to SSH Server</h3>
+                            <form id="ssh-form">
+                                <div class="form-group">
+                                    <label for="host">Host:</label>
+                                    <input type="text" id="host" name="host" required placeholder="example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="port">Port:</label>
+                                    <input type="number" id="port" name="port" value="22" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="username">Username:</label>
+                                    <input type="text" id="username" name="username" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="password">Password:</label>
+                                    <input type="password" id="password" name="password" placeholder="Leave empty if using key">
+                                </div>
+                                <div class="form-group">
+                                    <label for="private-key">Private Key (optional):</label>
+                                    <textarea id="private-key" name="private-key" rows="3" placeholder="Paste private key here"></textarea>
+                                </div>
+                                <div id="ssh-error" class="error" style="display: none;"></div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn-primary">Connect</button>
+                                    <button type="button" id="disconnect-ssh-btn" class="btn-secondary" style="display: none;">Disconnect</button>
+                                </div>
+                            </form>
                         </div>
-                        <div class="form-group">
-                            <label for="port">Port:</label>
-                            <input type="number" id="port" name="port" value="22" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="username">Username:</label>
-                            <input type="text" id="username" name="username" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="password">Password:</label>
-                            <input type="password" id="password" name="password" placeholder="Leave empty if using key">
-                        </div>
-                        <div class="form-group">
-                            <label for="private-key">Private Key (optional):</label>
-                            <textarea id="private-key" name="private-key" rows="3" placeholder="Paste private key here"></textarea>
-                        </div>
-                        <div id="ssh-error" class="error" style="display: none;"></div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn-primary">Connect</button>
-                            <button type="button" id="disconnect-ssh-btn" class="btn-secondary" style="display: none;">Disconnect</button>
-                        </div>
-                    </form>
+                    </div>
                 </div>
             </div>
         </div>

@@ -22,6 +22,8 @@ use crate::state::AppState;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionRequest {
     pub session_id: Option<String>,
+    /// Optional API key for per-session Gemini authentication
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,8 +78,13 @@ pub enum CommandMessage {
 }
 
 /// Create a new session
-pub async fn create_session_handler(State(state): State<AppState>) -> Json<SessionResponse> {
-    let session = state.create_session().await;
+pub async fn create_session_handler(
+    State(state): State<AppState>,
+    Json(request): Json<SessionRequest>,
+) -> Json<SessionResponse> {
+    // Filter out empty API keys
+    let api_key = request.api_key.filter(|k| !k.is_empty());
+    let session = state.create_session(api_key).await;
     Json(SessionResponse {
         session_id: session.id.to_string(),
         success: true,
@@ -90,8 +97,8 @@ pub async fn ssh_connect_handler(
     State(state): State<AppState>,
     Json(request): Json<SshConnectRequest>,
 ) -> Json<ConnectResponse> {
-    // Create session
-    let session = state.create_session().await;
+    // Create session (SSH-only, no Gemini API key needed)
+    let session = state.create_session(None).await;
 
     // Attempt to connect via SSH
     let ssh_config = SshConfig {
@@ -147,7 +154,7 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
-    let _session = match state.get_session(session_uuid).await {
+    let session = match state.get_session(session_uuid).await {
         Some(s) => s,
         None => {
             tracing::error!("Session not found: {}", session_id);
@@ -155,8 +162,11 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
-    // Spawn Gemini CLI process with PTY
-    let gemini = match GeminiTerminal::spawn() {
+    // Get the per-session API key (may be None)
+    let api_key = session.gemini_api_key.clone();
+
+    // Spawn Gemini CLI process with PTY, passing the session's API key
+    let gemini = match GeminiTerminal::spawn(api_key) {
         Ok(g) => g,
         Err(e) => {
             tracing::error!("Failed to spawn Gemini CLI: {}", e);
@@ -204,8 +214,8 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
 
     // Get PTY reader and writer
     let gemini_for_io = gemini_arc.lock().await;
-    let mut reader = gemini_for_io.get_reader();
-    let mut writer = gemini_for_io.take_writer();
+    let mut reader = gemini_for_io.get_reader().await;
+    let mut writer = gemini_for_io.take_writer().await;
     drop(gemini_for_io); // Release lock
 
     // Task to read from PTY and send to WebSocket
@@ -284,7 +294,7 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                                 let gemini_resize = gemini_for_resize.clone();
                                 let resize_result = rt.block_on(async {
                                     let gemini = gemini_resize.lock().await;
-                                    gemini.resize(width as u16, height as u16)
+                                    gemini.resize(width as u16, height as u16).await
                                 });
                                 if let Err(e) = resize_result {
                                     tracing::error!("Failed to resize Gemini PTY: {}", e);
@@ -328,6 +338,13 @@ pub async fn ssh_terminal_ws_handler(
     ws.on_upgrade(move |socket| ssh_terminal_connection(socket, session_id, state))
 }
 
+/// Commands sent from WebSocket receiver to SSH handler
+enum SshCommand {
+    Input(String),
+    Resize(u32, u32),
+    Close,
+}
+
 async fn ssh_terminal_connection(socket: WebSocket, session_id: String, state: AppState) {
     let session_uuid = match Uuid::parse_str(&session_id) {
         Ok(id) => id,
@@ -345,81 +362,113 @@ async fn ssh_terminal_connection(socket: WebSocket, session_id: String, state: A
         }
     };
 
-    let (mut sender, mut receiver) = socket.split();
+    let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Clone the SSH session for reading
+    // Create channel for sending commands to SSH handler
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<SshCommand>();
+
+    // Clone the SSH session
     let ssh_session = session.ssh_session.clone();
 
-    // Spawn a task to read from SSH and send to WebSocket
+    // Single task that owns the SSH session and handles both input and output
     let session_clone = session.clone();
-    let mut send_task = tokio::spawn(async move {
+    let mut ssh_task = tokio::spawn(async move {
         if let Some(ssh) = ssh_session {
             let mut ssh_guard = ssh.lock().await;
-            loop {
-                match ssh_guard.read_output().await {
-                    Ok(Some(output)) => {
-                        // Add to session's SSH output buffer
-                        session_clone.add_ssh_output(output.clone()).await;
 
-                        // Send to WebSocket
-                        let msg = TerminalMessage::Output { data: output };
-                        let json = serde_json::to_string(&msg).unwrap();
-                        if sender.send(Message::Text(json)).await.is_err() {
-                            break;
+            loop {
+                tokio::select! {
+                    // Check for commands from WebSocket
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(SshCommand::Input(data)) => {
+                                if let Err(e) = ssh_guard.send_input(data).await {
+                                    tracing::error!("Error sending SSH input: {}", e);
+                                    break;
+                                }
+                            }
+                            Some(SshCommand::Resize(width, height)) => {
+                                if let Err(e) = ssh_guard.resize(width, height).await {
+                                    tracing::error!("Error resizing SSH terminal: {}", e);
+                                }
+                            }
+                            Some(SshCommand::Close) | None => {
+                                tracing::info!("SSH command channel closed");
+                                break;
+                            }
                         }
                     }
-                    Ok(None) => {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                    Err(e) => {
-                        tracing::error!("Error reading SSH output: {}", e);
-                        let msg = TerminalMessage::Error {
-                            message: e.to_string(),
-                        };
-                        let json = serde_json::to_string(&msg).unwrap();
-                        let _ = sender.send(Message::Text(json)).await;
-                        break;
+
+                    // Check for output from SSH (with timeout to allow command processing)
+                    result = tokio::time::timeout(
+                        tokio::time::Duration::from_millis(50),
+                        ssh_guard.read_output()
+                    ) => {
+                        match result {
+                            Ok(Ok(Some(output))) => {
+                                // Add to session's SSH output buffer
+                                session_clone.add_ssh_output(output.clone()).await;
+
+                                // Send to WebSocket
+                                let msg = TerminalMessage::Output { data: output };
+                                let json = serde_json::to_string(&msg).unwrap();
+                                if ws_sender.send(Message::Text(json)).await.is_err() {
+                                    tracing::warn!("WebSocket closed, stopping SSH handler");
+                                    break;
+                                }
+                            }
+                            Ok(Ok(None)) => {
+                                // No output available, continue
+                            }
+                            Ok(Err(e)) => {
+                                tracing::error!("Error reading SSH output: {}", e);
+                                let msg = TerminalMessage::Error {
+                                    message: e.to_string(),
+                                };
+                                let json = serde_json::to_string(&msg).unwrap();
+                                let _ = ws_sender.send(Message::Text(json)).await;
+                                break;
+                            }
+                            Err(_) => {
+                                // Timeout - no output, continue to process commands
+                            }
+                        }
                     }
                 }
             }
         }
     });
 
-    // Handle incoming messages from WebSocket
-    let ssh_session = session.ssh_session.clone();
+    // Task to receive WebSocket messages and forward to SSH handler
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
+        while let Some(Ok(msg)) = ws_receiver.next().await {
             if let Message::Text(text) = msg {
                 if let Ok(terminal_msg) = serde_json::from_str::<TerminalMessage>(&text) {
                     match terminal_msg {
                         TerminalMessage::Input { data } => {
-                            if let Some(ssh) = &ssh_session {
-                                let mut ssh_guard = ssh.lock().await;
-                                // Send raw input for user keystrokes
-                                if let Err(e) = ssh_guard.send_input(data).await {
-                                    tracing::error!("Error sending input: {}", e);
-                                }
+                            if cmd_tx.send(SshCommand::Input(data)).is_err() {
+                                break;
                             }
                         }
                         TerminalMessage::Resize { width, height } => {
-                            if let Some(ssh) = &ssh_session {
-                                let mut ssh_guard = ssh.lock().await;
-                                if let Err(e) = ssh_guard.resize(width, height).await {
-                                    tracing::error!("Error resizing terminal: {}", e);
-                                }
+                            if cmd_tx.send(SshCommand::Resize(width, height)).is_err() {
+                                break;
                             }
                         }
                         _ => {}
                     }
                 }
+            } else if let Message::Close(_) = msg {
+                let _ = cmd_tx.send(SshCommand::Close);
+                break;
             }
         }
     });
 
     // Wait for either task to finish
     tokio::select! {
-        _ = &mut send_task => recv_task.abort(),
-        _ = &mut recv_task => send_task.abort(),
+        _ = &mut ssh_task => recv_task.abort(),
+        _ = &mut recv_task => ssh_task.abort(),
     };
 }
 

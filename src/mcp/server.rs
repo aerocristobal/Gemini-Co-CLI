@@ -1,12 +1,14 @@
 //! MCP server implementation for SSH tools.
+//!
+//! Provides SSH tool implementations with manual JSON-RPC handling.
+//! Uses rmcp 0.12.0 model types for MCP-compliant responses.
 
 use crate::mcp::approval::ApprovalChannel;
-use crate::mcp::tools::{
-    get_tool_definitions, SshConnectParams, SshExecuteParams, SshReadOutputParams,
-};
 use crate::ssh::{SshConfig, SshSession};
-use anyhow::Result;
-use serde_json::{json, Value};
+use rmcp::model::{CallToolResult, Content, Tool};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
@@ -15,7 +17,7 @@ use uuid::Uuid;
 /// Shared SSH session state for MCP tools.
 pub struct SshState {
     pub session: Option<Arc<Mutex<SshSession>>>,
-    pub output_buffer: Arc<RwLock<Vec<String>>>,
+    output_buffer: Arc<RwLock<Vec<String>>>,
 }
 
 impl SshState {
@@ -30,25 +32,103 @@ impl SshState {
     pub async fn add_output(&self, output: String) {
         let mut buffer = self.output_buffer.write().await;
         buffer.push(output);
-
-        // Keep buffer size manageable
+        // Keep buffer manageable
         if buffer.len() > 100 {
             let remove_count = buffer.len() - 100;
             buffer.drain(0..remove_count);
         }
     }
 
-    /// Get recent output.
+    /// Get recent output lines.
     pub async fn get_recent_output(&self, lines: usize) -> Vec<String> {
         let buffer = self.output_buffer.read().await;
-        buffer.iter().rev().take(lines).rev().cloned().collect()
+        let start = buffer.len().saturating_sub(lines);
+        buffer[start..].to_vec()
     }
 }
 
-/// MCP SSH service that handles tool calls.
+// ============================================================================
+// Tool Parameter Types (with JsonSchema for automatic schema generation)
+// ============================================================================
+
+/// Parameters for ssh_connect tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshConnectParams {
+    /// SSH server hostname or IP address.
+    pub host: String,
+    /// SSH server port (default: 22).
+    #[serde(default = "default_port")]
+    pub port: u16,
+    /// Username for authentication.
+    pub username: String,
+    /// Password for authentication (optional if using key).
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Private key for authentication (optional if using password).
+    #[serde(default)]
+    pub private_key: Option<String>,
+}
+
+fn default_port() -> u16 {
+    22
+}
+
+/// Parameters for ssh_execute tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshExecuteParams {
+    /// The command to execute on the remote server.
+    pub command: String,
+    /// Timeout in seconds for user approval (default: 30).
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    /// Whether to wait for command output before returning (default: true).
+    #[serde(default = "default_wait")]
+    pub wait_for_output: bool,
+}
+
+fn default_timeout() -> u64 {
+    30
+}
+
+fn default_wait() -> bool {
+    true
+}
+
+/// Parameters for ssh_read_output tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SshReadOutputParams {
+    /// Number of recent output lines to retrieve (default: 50).
+    #[serde(default = "default_lines")]
+    pub lines: usize,
+}
+
+fn default_lines() -> usize {
+    50
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Convert a schemars schema to the Arc<Map<String, Value>> format expected by rmcp.
+fn schema_to_arc_map<T: JsonSchema>() -> Arc<Map<String, Value>> {
+    let schema = schemars::schema_for!(T);
+    let value = serde_json::to_value(schema).unwrap_or_default();
+    if let Value::Object(map) = value {
+        Arc::new(map)
+    } else {
+        Arc::new(Map::new())
+    }
+}
+
+// ============================================================================
+// MCP SSH Service
+// ============================================================================
+
+/// MCP service providing SSH tools for Gemini CLI integration.
 pub struct McpSshService {
     pub session_id: Uuid,
-    pub ssh_state: Arc<RwLock<SshState>>,
+    ssh_state: Arc<RwLock<SshState>>,
     pub approval_channel: Arc<ApprovalChannel>,
 }
 
@@ -62,274 +142,222 @@ impl McpSshService {
         }
     }
 
-    /// Handle an MCP JSON-RPC request.
-    pub async fn handle_request(&self, request: Value) -> Value {
-        let id = request.get("id").cloned();
-        let method = request
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
-
-        let result = match method {
-            "initialize" => self.handle_initialize(&request).await,
-            "tools/list" => self.handle_list_tools().await,
-            "tools/call" => self.handle_call_tool(&request).await,
-            _ => Err(McpError::MethodNotFound(method.to_string())),
-        };
-
-        match result {
-            Ok(result) => json!({
-                "jsonrpc": "2.0",
-                "result": result,
-                "id": id
-            }),
-            Err(e) => json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": e.code(),
-                    "message": e.message()
-                },
-                "id": id
-            }),
-        }
+    /// Get server info for MCP initialization.
+    pub fn get_server_info(&self) -> Value {
+        json!({
+            "name": "gemini-co-cli-mcp",
+            "version": env!("CARGO_PKG_VERSION")
+        })
     }
 
-    /// Handle initialize request.
-    async fn handle_initialize(&self, _request: &Value) -> Result<Value, McpError> {
-        Ok(json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {}
+    /// List available tools with their schemas.
+    pub fn list_tools(&self) -> Vec<Tool> {
+        vec![
+            Tool {
+                name: "ssh_connect".into(),
+                description: Some("Connect to a remote SSH server. Must be called before executing commands.".into()),
+                input_schema: schema_to_arc_map::<SshConnectParams>(),
+                annotations: None,
+                output_schema: None,
+                meta: None,
+                icons: None,
+                title: None,
             },
-            "serverInfo": {
-                "name": "gemini-co-cli-ssh",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }))
+            Tool {
+                name: "ssh_execute".into(),
+                description: Some("Execute a command on the connected SSH server. Requires user approval.".into()),
+                input_schema: schema_to_arc_map::<SshExecuteParams>(),
+                annotations: None,
+                output_schema: None,
+                meta: None,
+                icons: None,
+                title: Some("SSH Execute (requires approval)".into()),
+            },
+            Tool {
+                name: "ssh_read_output".into(),
+                description: Some("Read recent output from the SSH terminal session.".into()),
+                input_schema: schema_to_arc_map::<SshReadOutputParams>(),
+                annotations: None,
+                output_schema: None,
+                meta: None,
+                icons: None,
+                title: None,
+            },
+        ]
     }
 
-    /// Handle tools/list request.
-    async fn handle_list_tools(&self) -> Result<Value, McpError> {
-        let tools = get_tool_definitions();
-        Ok(json!({ "tools": tools }))
-    }
-
-    /// Handle tools/call request.
-    async fn handle_call_tool(&self, request: &Value) -> Result<Value, McpError> {
-        let params = request
-            .get("params")
-            .ok_or(McpError::InvalidParams("Missing params".to_string()))?;
-
-        let tool_name = params
-            .get("name")
-            .and_then(|n| n.as_str())
-            .ok_or(McpError::InvalidParams("Missing tool name".to_string()))?;
-
-        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-
-        match tool_name {
+    /// Call a tool by name with the given arguments.
+    pub async fn call_tool(&self, name: &str, arguments: Value) -> CallToolResult {
+        match name {
             "ssh_connect" => self.tool_ssh_connect(arguments).await,
             "ssh_execute" => self.tool_ssh_execute(arguments).await,
             "ssh_read_output" => self.tool_ssh_read_output(arguments).await,
-            _ => Err(McpError::ToolNotFound(tool_name.to_string())),
+            _ => CallToolResult::error(vec![Content::text(format!(
+                "Unknown tool: {}",
+                name
+            ))]),
         }
     }
 
-    /// Connect to an SSH server.
-    async fn tool_ssh_connect(&self, arguments: Value) -> Result<Value, McpError> {
-        let params: SshConnectParams = serde_json::from_value(arguments)
-            .map_err(|e| McpError::InvalidParams(e.to_string()))?;
+    /// Connect to a remote SSH server.
+    async fn tool_ssh_connect(&self, arguments: Value) -> CallToolResult {
+        let params: SshConnectParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Invalid parameters: {}",
+                    e
+                ))]);
+            }
+        };
 
         let config = SshConfig {
             host: params.host.clone(),
             port: params.port,
             username: params.username.clone(),
-            password: params.password,
-            private_key: params.private_key,
+            password: params.password.clone(),
+            private_key: params.private_key.clone(),
         };
 
         match SshSession::connect(config).await {
-            Ok(ssh_session) => {
+            Ok(session) => {
                 let mut state = self.ssh_state.write().await;
-                state.session = Some(Arc::new(Mutex::new(ssh_session)));
+                state.session = Some(Arc::new(Mutex::new(session)));
 
-                Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Successfully connected to {}:{} as {}",
-                            params.host, params.port, params.username)
-                    }]
-                }))
+                CallToolResult::success(vec![Content::text(format!(
+                    "Successfully connected to {}@{}:{}",
+                    params.username, params.host, params.port
+                ))])
             }
-            Err(e) => Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Failed to connect: {}", e)
-                }],
-                "isError": true
-            })),
+            Err(e) => CallToolResult::error(vec![Content::text(format!(
+                "Failed to connect: {}",
+                e
+            ))]),
         }
     }
 
-    /// Execute a command on the SSH server (requires approval).
-    async fn tool_ssh_execute(&self, arguments: Value) -> Result<Value, McpError> {
-        let params: SshExecuteParams = serde_json::from_value(arguments)
-            .map_err(|e| McpError::InvalidParams(e.to_string()))?;
+    /// Execute a command on the connected SSH server.
+    async fn tool_ssh_execute(&self, arguments: Value) -> CallToolResult {
+        let params: SshExecuteParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Invalid parameters: {}",
+                    e
+                ))]);
+            }
+        };
 
         // Check if SSH is connected
-        let state = self.ssh_state.read().await;
-        if state.session.is_none() {
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": "No SSH connection. Use ssh_connect first."
-                }],
-                "isError": true
-            }));
+        {
+            let state = self.ssh_state.read().await;
+            if state.session.is_none() {
+                return CallToolResult::error(vec![Content::text(
+                    "SSH not connected. Call ssh_connect first.",
+                )]);
+            }
         }
-        drop(state);
 
-        // Request approval from user
-        tracing::info!(
-            "Requesting approval for command: {}",
-            params.command
-        );
-
-        let timeout = Duration::from_secs(params.timeout_seconds as u64);
-        let approval_result = self
+        // Request user approval
+        let timeout = Duration::from_secs(params.timeout_seconds);
+        let (approval_id, response_rx) = self
             .approval_channel
-            .wait_for_approval(params.command.clone(), timeout)
+            .request_approval(params.command.clone())
             .await;
 
-        match approval_result {
-            Ok(true) => {
-                // Approved - execute the command
-                let state = self.ssh_state.read().await;
-                if let Some(ssh) = &state.session {
-                    let mut ssh_guard = ssh.lock().await;
+        // Wait for approval with timeout
+        let approved = match tokio::time::timeout(timeout, response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                // Channel closed - treat as rejection
+                return CallToolResult::error(vec![Content::text(
+                    "Approval channel closed unexpectedly.",
+                )]);
+            }
+            Err(_) => {
+                // Timeout
+                self.approval_channel
+                    .broadcast_rejection(approval_id)
+                    .await;
+                return CallToolResult::error(vec![Content::text(
+                    "Approval timeout - command not executed.",
+                )]);
+            }
+        };
 
-                    match ssh_guard.execute_command(params.command.clone()).await {
-                        Ok(_) => {
-                            drop(ssh_guard);
-                            drop(state);
+        if !approved {
+            return CallToolResult::error(vec![Content::text("Command rejected by user.")]);
+        }
 
-                            // Wait briefly for output if requested
-                            if params.wait_for_output {
-                                tokio::time::sleep(Duration::from_millis(500)).await;
+        // Execute the approved command
+        let state = self.ssh_state.read().await;
+        if let Some(ssh) = &state.session {
+            let mut ssh_guard = ssh.lock().await;
 
-                                let state = self.ssh_state.read().await;
-                                let output = state.get_recent_output(20).await;
-                                let output_text = output.join("");
+            if let Err(e) = ssh_guard.execute_command(params.command.clone()).await {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Command execution failed: {}",
+                    e
+                ))]);
+            }
 
-                                Ok(json!({
-                                    "content": [{
-                                        "type": "text",
-                                        "text": format!("Command executed: {}\n\nOutput:\n{}",
-                                            params.command, output_text)
-                                    }]
-                                }))
-                            } else {
-                                Ok(json!({
-                                    "content": [{
-                                        "type": "text",
-                                        "text": format!("Command sent: {}", params.command)
-                                    }]
-                                }))
-                            }
-                        }
-                        Err(e) => Ok(json!({
-                            "content": [{
-                                "type": "text",
-                                "text": format!("Command execution failed: {}", e)
-                            }],
-                            "isError": true
-                        })),
+            // If wait_for_output, read some output
+            if params.wait_for_output {
+                // Give the command time to produce output
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                match ssh_guard.read_output().await {
+                    Ok(Some(output)) => {
+                        // Store in buffer
+                        drop(ssh_guard);
+                        drop(state);
+                        self.ssh_state.read().await.add_output(output.clone()).await;
+
+                        CallToolResult::success(vec![Content::text(format!(
+                            "Command executed successfully.\nOutput:\n{}",
+                            output
+                        ))])
                     }
-                } else {
-                    Ok(json!({
-                        "content": [{
-                            "type": "text",
-                            "text": "SSH session disconnected"
-                        }],
-                        "isError": true
-                    }))
+                    Ok(None) => CallToolResult::success(vec![Content::text(
+                        "Command executed successfully. No immediate output.",
+                    )]),
+                    Err(e) => CallToolResult::success(vec![Content::text(format!(
+                        "Command executed but failed to read output: {}",
+                        e
+                    ))]),
                 }
+            } else {
+                CallToolResult::success(vec![Content::text("Command sent successfully.")])
             }
-            Ok(false) => {
-                // Rejected by user
-                Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Command rejected by user: {}", params.command)
-                    }]
-                }))
-            }
-            Err(e) => {
-                // Timeout or error
-                Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Approval failed: {}", e)
-                    }],
-                    "isError": true
-                }))
-            }
+        } else {
+            CallToolResult::error(vec![Content::text("SSH session lost.")])
         }
     }
 
-    /// Read recent output from the SSH terminal.
-    async fn tool_ssh_read_output(&self, arguments: Value) -> Result<Value, McpError> {
-        let params: SshReadOutputParams = serde_json::from_value(arguments)
-            .map_err(|e| McpError::InvalidParams(e.to_string()))?;
+    /// Read recent output from the SSH terminal session.
+    async fn tool_ssh_read_output(&self, arguments: Value) -> CallToolResult {
+        let params: SshReadOutputParams = match serde_json::from_value(arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Invalid parameters: {}",
+                    e
+                ))]);
+            }
+        };
 
         let state = self.ssh_state.read().await;
         let output = state.get_recent_output(params.lines).await;
 
-        let output_text = if output.is_empty() {
-            "No SSH output available".to_string()
+        if output.is_empty() {
+            CallToolResult::success(vec![Content::text("No recent output available.")])
         } else {
-            output.join("")
-        };
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": output_text
-            }]
-        }))
+            CallToolResult::success(vec![Content::text(output.join(""))])
+        }
     }
 
-    /// Get the SSH state for external access (e.g., WebSocket handlers).
+    /// Get a reference to the SSH state.
     pub fn get_ssh_state(&self) -> Arc<RwLock<SshState>> {
         self.ssh_state.clone()
-    }
-}
-
-/// MCP error types.
-#[derive(Debug)]
-pub enum McpError {
-    MethodNotFound(String),
-    ToolNotFound(String),
-    InvalidParams(String),
-    InternalError(String),
-}
-
-impl McpError {
-    fn code(&self) -> i32 {
-        match self {
-            McpError::MethodNotFound(_) => -32601,
-            McpError::ToolNotFound(_) => -32602,
-            McpError::InvalidParams(_) => -32602,
-            McpError::InternalError(_) => -32603,
-        }
-    }
-
-    fn message(&self) -> String {
-        match self {
-            McpError::MethodNotFound(m) => format!("Method not found: {}", m),
-            McpError::ToolNotFound(t) => format!("Tool not found: {}", t),
-            McpError::InvalidParams(p) => format!("Invalid params: {}", p),
-            McpError::InternalError(e) => format!("Internal error: {}", e),
-        }
     }
 }

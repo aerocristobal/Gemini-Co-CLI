@@ -9,39 +9,21 @@ let geminiFitAddon = null;
 let sshFitAddon = null;
 let pendingCommand = null;
 let sshConnected = false;
+let geminiConnected = false;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initializeApp();
 });
 
-// Initialize the main application immediately
+// Initialize the main application - show auth forms first
 async function initializeApp() {
     try {
-        // Create a session
-        const response = await fetch('/api/session/create', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({}),
-        });
-
-        const result = await response.json();
-        if (!result.success) {
-            console.error('Failed to create session');
-            alert('Failed to create session. Please refresh the page.');
-            return;
-        }
-
-        sessionId = result.session_id;
-        console.log('Session created:', sessionId);
-
-        // Setup terminals immediately
+        // Setup terminals (but don't connect yet)
         setupTerminals();
 
-        // Connect Gemini WebSocket
-        connectGeminiWebSocket();
+        // Setup Gemini auth form handler
+        setupGeminiAuthForm();
 
         // Setup SSH form handler
         setupSSHForm();
@@ -51,6 +33,79 @@ async function initializeApp() {
     } catch (error) {
         console.error('Failed to initialize app:', error);
         alert('Failed to initialize application: ' + error.message);
+    }
+}
+
+// Setup Gemini authentication form
+function setupGeminiAuthForm() {
+    const form = document.getElementById('gemini-form');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const apiKey = document.getElementById('api-key').value.trim();
+
+        try {
+            // Create a session with optional API key
+            const response = await fetch('/api/session/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    api_key: apiKey || null,
+                }),
+            });
+
+            const result = await response.json();
+            if (!result.success) {
+                showGeminiError('Failed to create session');
+                return;
+            }
+
+            sessionId = result.session_id;
+            console.log('Session created:', sessionId);
+
+            // Hide the auth form
+            document.getElementById('gemini-auth-form').style.display = 'none';
+
+            // Update status
+            updateGeminiStatus('connecting');
+
+            // Connect Gemini WebSocket
+            connectGeminiWebSocket();
+
+        } catch (error) {
+            showGeminiError('Failed to connect: ' + error.message);
+        }
+    });
+}
+
+// Show Gemini error
+function showGeminiError(message) {
+    const errorDiv = document.getElementById('gemini-error');
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+
+    setTimeout(() => {
+        errorDiv.style.display = 'none';
+    }, 5000);
+}
+
+// Update Gemini status badge
+function updateGeminiStatus(status) {
+    const statusBadge = document.getElementById('gemini-status');
+    if (status === 'connected') {
+        statusBadge.textContent = 'Connected';
+        statusBadge.className = 'status-badge connected';
+        geminiConnected = true;
+    } else if (status === 'connecting') {
+        statusBadge.textContent = 'Connecting...';
+        statusBadge.className = 'status-badge connecting';
+    } else {
+        statusBadge.textContent = 'Not Connected';
+        statusBadge.className = 'status-badge disconnected';
+        geminiConnected = false;
     }
 }
 
@@ -217,6 +272,7 @@ function connectGeminiWebSocket() {
 
     geminiTerminalWs.onopen = () => {
         console.log('Gemini terminal WebSocket connected');
+        updateGeminiStatus('connected');
         geminiTerminal.write('\x1b[32m✓ Connected to Gemini CLI\x1b[0m\r\n\r\n');
 
         // Send initial terminal size
@@ -246,7 +302,10 @@ function connectGeminiWebSocket() {
 
     geminiTerminalWs.onclose = () => {
         console.log('Gemini terminal WebSocket closed');
+        updateGeminiStatus('disconnected');
         geminiTerminal.write('\x1b[33m✗ Connection closed\x1b[0m\r\n');
+        // Show auth form again for reconnection
+        document.getElementById('gemini-auth-form').style.display = 'flex';
     };
 
     // Connect command approval WebSocket

@@ -23,8 +23,8 @@ async-trait = "0.1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # MCP Protocol support
-schemars = "0.8"
-rmcp = { version = "0.1", features = ["server", "transport-sse-server"] }
+schemars = "1.0"
+rmcp = { version = "0.12", features = ["server", "macros", "server-side-http", "axum", "tower"] }
 
 # Logging
 tracing = "0.1"

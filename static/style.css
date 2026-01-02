@@ -49,6 +49,11 @@ body {
     color: #f87171;
 }
 
+.status-badge.connecting {
+    background: #4a3e1e;
+    color: #fbbf24;
+}
+
 .modal {
     position: fixed;
     top: 0;
@@ -147,14 +152,16 @@ body {
 }
 
 #app-container {
-    height: calc(100vh - 73px);
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .split-container {
     display: flex;
     flex: 1;
+    min-height: 0; /* Important for nested flexbox to work properly */
     overflow: hidden;
 }
 
@@ -163,6 +170,7 @@ body {
     flex-direction: column;
     background: #1a1a1a;
     overflow: hidden;
+    min-height: 0; /* Important for nested flexbox */
 }
 
 .gemini-pane {
@@ -173,18 +181,16 @@ body {
 .terminal-pane {
     flex: 1;
     min-width: 300px;
+}
+
+/* Pane content area - contains terminal and overlay forms */
+.pane-content {
+    flex: 1;
     position: relative;
-}
-
-.pane-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #333;
-    background: #0f0f0f;
-}
-
-.pane-header h2 {
-    font-size: 1.125rem;
-    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0; /* Important for nested flexbox */
 }
 
 .resizer {
@@ -273,8 +279,9 @@ body {
     cursor: text;
 }
 
-/* SSH Connection Form Overlay */
-.ssh-form-container {
+/* Connection Form Overlay (used by both Gemini and SSH) */
+.ssh-form-container,
+.auth-form-container {
     position: absolute;
     top: 0;
     left: 0;
@@ -282,32 +289,98 @@ body {
     bottom: 0;
     background: rgba(15, 15, 15, 0.98);
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 2rem;
     z-index: 10;
+    overflow-y: auto; /* Allow scrolling if content is too tall */
 }
 
-.ssh-form-container h3 {
-    color: #fff;
-    margin-bottom: 1.5rem;
-    font-size: 1.25rem;
-}
-
-.ssh-form-container form {
+/* Form wrapper centers content and allows scrolling */
+.form-wrapper {
     width: 100%;
     max-width: 400px;
+    margin: auto; /* Centers vertically when container scrolls */
 }
 
-.ssh-form-container .form-actions {
+.ssh-form-container h3,
+.auth-form-container h3,
+.form-wrapper h3 {
+    color: #fff;
+    margin-bottom: 0.5rem;
+    font-size: 1.25rem;
+    text-align: center;
+}
+
+.auth-description {
+    color: #888;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+.form-wrapper form {
+    width: 100%;
+}
+
+.form-wrapper .form-actions {
     display: flex;
     gap: 0.5rem;
-    margin-top: 0.5rem;
+    margin-top: 1rem;
 }
 
-.ssh-form-container .form-actions button {
+.form-wrapper .form-actions button {
     flex: 1;
+}
+
+.form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: #888;
+}
+
+.form-hint a {
+    color: #4ade80;
+    text-decoration: none;
+}
+
+.form-hint a:hover {
+    text-decoration: underline;
+}
+
+.auth-note {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.2);
+    border-radius: 4px;
+    font-size: 0.875rem;
+    color: #888;
+}
+
+.auth-note strong {
+    color: #4ade80;
+}
+
+/* Pane header with status badge */
+.pane-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #333;
+    background: #0f0f0f;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pane-header h2 {
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.pane-header .status-badge {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
 }
 
 .command-preview {
