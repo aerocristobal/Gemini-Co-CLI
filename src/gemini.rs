@@ -98,33 +98,3 @@ impl GeminiTerminal {
         Ok(())
     }
 }
-
-/// Parse Gemini output for EXECUTE commands
-pub fn extract_command(text: &str) -> Option<String> {
-    // Look for "EXECUTE: <command>" pattern
-    if let Some(pos) = text.find("EXECUTE:") {
-        let command_part = &text[pos + 8..];
-        let command = command_part.lines().next().unwrap_or("").trim().to_string();
-        if !command.is_empty() {
-            return Some(command);
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_command() {
-        let text = "Sure! EXECUTE: ls -la";
-        assert_eq!(extract_command(text), Some("ls -la".to_string()));
-
-        let text_no_cmd = "Here's some help text";
-        assert_eq!(extract_command(text_no_cmd), None);
-
-        let text_multiline = "I recommend:\nEXECUTE: pwd";
-        assert_eq!(extract_command(text_multiline), Some("pwd".to_string()));
-    }
-}

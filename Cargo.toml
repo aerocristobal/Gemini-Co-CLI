@@ -20,6 +20,11 @@ russh = "0.54"
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# MCP Protocol support
+schemars = "0.8"
+rmcp = { version = "0.1", features = ["server", "transport-sse-server"] }
 
 # Logging
 tracing = "0.1"
@@ -41,3 +46,7 @@ portable-pty = "0.8"
 # Pin base64ct to version compatible with Rust 1.83
 [dependencies.base64ct]
 version = "=1.6.0"
+
+# Pin home to version compatible with Rust 1.83 (0.5.12 requires edition2024)
+[dependencies.home]
+version = "=0.5.9"

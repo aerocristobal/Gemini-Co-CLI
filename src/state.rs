@@ -3,7 +3,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
+use crate::mcp::{ApprovalChannel, McpSshService};
 use crate::ssh::SshSession;
+
+/// Shared MCP services indexed by session ID.
+pub type McpServices = Arc<RwLock<HashMap<Uuid, Arc<McpSshService>>>>;
 
 /// Represents a user session with both Gemini and SSH terminals
 #[derive(Clone)]
@@ -11,25 +15,26 @@ pub struct Session {
     pub id: Uuid,
     pub ssh_session: Option<Arc<Mutex<SshSession>>>,
     pub ssh_output_buffer: Arc<RwLock<Vec<String>>>,
-    pub pending_commands: Arc<Mutex<Vec<PendingCommand>>>,
+    /// Event-driven approval channel (replaces polling-based pending_commands)
+    pub approval_channel: Arc<ApprovalChannel>,
+    /// MCP service for this session
+    pub mcp_service: Arc<McpSshService>,
     /// Channel to send SSH output to Gemini terminal
     pub ssh_to_gemini_tx: Option<Arc<Mutex<mpsc::UnboundedSender<String>>>>,
 }
 
-#[derive(Clone, Debug)]
-pub struct PendingCommand {
-    pub command: String,
-    pub approved: bool,
-    pub id: Uuid,
-}
-
 impl Session {
     pub fn new() -> Self {
+        let id = Uuid::new_v4();
+        let approval_channel = Arc::new(ApprovalChannel::new());
+        let mcp_service = Arc::new(McpSshService::new(id, approval_channel.clone()));
+
         Self {
-            id: Uuid::new_v4(),
+            id,
             ssh_session: None,
             ssh_output_buffer: Arc::new(RwLock::new(Vec::new())),
-            pending_commands: Arc::new(Mutex::new(Vec::new())),
+            approval_channel,
+            mcp_service,
             ssh_to_gemini_tx: None,
         }
     }
@@ -48,8 +53,12 @@ impl Session {
         // Also send to Gemini terminal if connected
         if let Some(tx) = &self.ssh_to_gemini_tx {
             let tx = tx.lock().await;
-            let _ = tx.send(output);
+            let _ = tx.send(output.clone());
         }
+
+        // Also add to MCP SSH state for tool access
+        let ssh_state = self.mcp_service.get_ssh_state();
+        ssh_state.read().await.add_output(output).await;
     }
 
     /// Get recent SSH output for Gemini context
@@ -57,25 +66,14 @@ impl Session {
         self.ssh_output_buffer.read().await.clone()
     }
 
-    pub async fn add_pending_command(&self, command: String) -> Uuid {
-        let cmd_id = Uuid::new_v4();
-        let mut pending = self.pending_commands.lock().await;
-        pending.push(PendingCommand {
-            command,
-            approved: false,
-            id: cmd_id,
-        });
-        cmd_id
+    /// Get the approval channel for this session.
+    pub fn get_approval_channel(&self) -> Arc<ApprovalChannel> {
+        self.approval_channel.clone()
     }
 
-    pub async fn approve_command(&self, cmd_id: Uuid) -> Option<String> {
-        let mut pending = self.pending_commands.lock().await;
-        if let Some(cmd) = pending.iter_mut().find(|c| c.id == cmd_id) {
-            cmd.approved = true;
-            Some(cmd.command.clone())
-        } else {
-            None
-        }
+    /// Get the MCP service for this session.
+    pub fn get_mcp_service(&self) -> Arc<McpSshService> {
+        self.mcp_service.clone()
     }
 
     /// Set the channel to send SSH output to Gemini
@@ -88,17 +86,27 @@ impl Session {
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
+    /// MCP services registry for tool access
+    pub mcp_services: McpServices,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            mcp_services: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub async fn create_session(&self) -> Session {
         let session = Session::new();
+
+        // Register MCP service
+        {
+            let mut mcp_services = self.mcp_services.write().await;
+            mcp_services.insert(session.id, session.mcp_service.clone());
+        }
+
         let mut sessions = self.sessions.write().await;
         sessions.insert(session.id, session.clone());
         session
@@ -110,7 +118,18 @@ impl AppState {
     }
 
     pub async fn remove_session(&self, id: Uuid) {
+        // Unregister MCP service
+        {
+            let mut mcp_services = self.mcp_services.write().await;
+            mcp_services.remove(&id);
+        }
+
         let mut sessions = self.sessions.write().await;
         sessions.remove(&id);
+    }
+
+    /// Get the MCP services registry.
+    pub fn get_mcp_services(&self) -> McpServices {
+        self.mcp_services.clone()
     }
 }

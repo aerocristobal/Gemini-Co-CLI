@@ -258,8 +258,17 @@ function connectGeminiWebSocket() {
 
     commandApprovalWs.onmessage = (event) => {
         const message = JSON.parse(event.data);
-        if (message.type === 'command_request') {
-            showCommandApproval(message.command, message.command_id);
+        if (message.type === 'command_requested') {
+            // New MCP-based approval request
+            showCommandApproval(message.command, message.approval_id);
+        } else if (message.type === 'command_approved') {
+            // Command was approved (confirmation from another client or timeout)
+            console.log('Command approved:', message.approval_id);
+            hideCommandApprovalModal();
+        } else if (message.type === 'command_rejected') {
+            // Command was rejected
+            console.log('Command rejected:', message.approval_id);
+            hideCommandApprovalModal();
         }
     };
 
@@ -416,8 +425,8 @@ function showSSHError(message) {
 }
 
 // Command approval system
-function showCommandApproval(command, commandId) {
-    pendingCommand = { command, commandId };
+function showCommandApproval(command, approvalId) {
+    pendingCommand = { command, approvalId };
 
     document.getElementById('command-preview').textContent = command;
     document.getElementById('command-approval-modal').style.display = 'flex';
@@ -426,11 +435,17 @@ function showCommandApproval(command, commandId) {
     document.getElementById('reject-btn').onclick = () => approveCommand(false);
 }
 
+function hideCommandApprovalModal() {
+    document.getElementById('command-approval-modal').style.display = 'none';
+    pendingCommand = null;
+}
+
 function approveCommand(approved) {
     if (pendingCommand && commandApprovalWs && commandApprovalWs.readyState === WebSocket.OPEN) {
+        // Send decision using new MCP-based message format
         commandApprovalWs.send(JSON.stringify({
-            type: 'command_approval',
-            command_id: pendingCommand.commandId,
+            type: 'command_decision',
+            approval_id: pendingCommand.approvalId,
             approved: approved,
         }));
 
@@ -441,8 +456,7 @@ function approveCommand(approved) {
         }
     }
 
-    document.getElementById('command-approval-modal').style.display = 'none';
-    pendingCommand = null;
+    hideCommandApprovalModal();
 }
 
 // Setup pane resizer

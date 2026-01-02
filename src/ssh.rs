@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use russh::client::{self, Handle};
-use russh::keys::*;
+use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh::*;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -58,15 +58,16 @@ impl SshSession {
         } else if let Some(key_data) = config.private_key {
             let key = decode_secret_key(&key_data, None)
                 .context("Failed to decode private key")?;
+            let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
             session
-                .authenticate_publickey(config.username.clone(), Arc::new(key))
+                .authenticate_publickey(config.username.clone(), key_with_alg)
                 .await
                 .context("Failed to authenticate with public key")?
         } else {
             return Err(anyhow::anyhow!("No authentication method provided"));
         };
 
-        if !auth_result {
+        if !auth_result.success() {
             return Err(anyhow::anyhow!("Authentication failed"));
         }
 

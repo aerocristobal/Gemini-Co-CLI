@@ -10,10 +10,12 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
+use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::gemini::{extract_command, GeminiTerminal};
+use crate::gemini::GeminiTerminal;
+use crate::mcp::ApprovalEvent;
 use crate::ssh::{SshConfig, SshSession};
 use crate::state::AppState;
 
@@ -26,6 +28,7 @@ pub struct SessionRequest {
 pub struct SessionResponse {
     pub session_id: String,
     pub success: bool,
+    pub mcp_url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,8 +59,20 @@ pub enum TerminalMessage {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandMessage {
-    CommandRequest { command: String, command_id: String },
-    CommandApproval { command_id: String, approved: bool },
+    /// A command is awaiting approval (sent to frontend).
+    CommandRequested {
+        approval_id: String,
+        command: String,
+    },
+    /// A command was approved (sent to frontend).
+    CommandApproved { approval_id: String },
+    /// A command was rejected (sent to frontend).
+    CommandRejected { approval_id: String },
+    /// User decision on a command (received from frontend).
+    CommandDecision {
+        approval_id: String,
+        approved: bool,
+    },
 }
 
 /// Create a new session
@@ -66,6 +81,7 @@ pub async fn create_session_handler(State(state): State<AppState>) -> Json<Sessi
     Json(SessionResponse {
         session_id: session.id.to_string(),
         success: true,
+        mcp_url: format!("http://localhost:3000/mcp/{}", session.id),
     })
 }
 
@@ -131,7 +147,7 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         }
     };
 
-    let session = match state.get_session(session_uuid).await {
+    let _session = match state.get_session(session_uuid).await {
         Some(s) => s,
         None => {
             tracing::error!("Session not found: {}", session_id);
@@ -160,7 +176,9 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
     drop(gemini_check);
 
     if !is_running {
-        tracing::error!("Gemini CLI process exited immediately after spawn - authentication required");
+        tracing::error!(
+            "Gemini CLI process exited immediately after spawn - authentication required"
+        );
         // Send error message to WebSocket
         let error_msg = TerminalMessage::Output {
             data: format!(
@@ -170,10 +188,15 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                 2. Set the environment variable in docker-compose.yml:\r\n\
                    \x1b[33m- GEMINI_API_KEY=your_api_key_here\x1b[0m\r\n\r\n\
                 Or authenticate with OAuth by running:\r\n\
-                   \x1b[33mdocker-compose exec gemini-co-cli gemini\x1b[0m\r\n\r\n"
+                   \x1b[33mdocker-compose exec gemini-co-cli gemini\x1b[0m\r\n\r\n\
+                MCP server available for Gemini CLI at:\r\n\
+                   \x1b[33mhttp://localhost:3000/mcp/{}\x1b[0m\r\n\r\n",
+                session_id
             ),
         };
-        let _ = ws_sender.send(Message::Text(serde_json::to_string(&error_msg).unwrap())).await;
+        let _ = ws_sender
+            .send(Message::Text(serde_json::to_string(&error_msg).unwrap()))
+            .await;
         return; // Exit early since process is not running
     }
 
@@ -185,14 +208,11 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
     let mut writer = gemini_for_io.take_writer();
     drop(gemini_for_io); // Release lock
 
-    // Channel for command requests from Gemini
-    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
-
     // Task to read from PTY and send to WebSocket
+    // Note: Command detection is now handled via MCP tool calls, not text parsing
     let ws_sender_clone = ws_sender.clone();
     let mut output_task = tokio::task::spawn_blocking(move || {
         let mut buffer = vec![0u8; 4096];
-        let mut line_buffer = String::new();
 
         tracing::info!("Gemini PTY output task started");
 
@@ -202,20 +222,6 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                     let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                     tracing::debug!("Gemini PTY output: {} bytes", n);
 
-                    // Accumulate output for command detection
-                    line_buffer.push_str(&output);
-
-                    // Check for EXECUTE commands in accumulated buffer
-                    if let Some(command) = extract_command(&line_buffer) {
-                        tracing::info!("Gemini suggested command: {}", command);
-                        let _ = cmd_tx.send(command);
-                    }
-
-                    // Keep only last 1000 chars to avoid unbounded growth
-                    if line_buffer.len() > 1000 {
-                        line_buffer = line_buffer.chars().skip(line_buffer.len() - 1000).collect();
-                    }
-
                     // Send output to WebSocket
                     let msg = TerminalMessage::Output { data: output };
                     let json = serde_json::to_string(&msg).unwrap();
@@ -223,10 +229,13 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
                     // Use blocking channel to send to async task
                     let rt = tokio::runtime::Handle::current();
                     let sender = ws_sender_clone.clone();
-                    if rt.block_on(async {
-                        let mut s = sender.lock().await;
-                        s.send(Message::Text(json)).await
-                    }).is_err() {
+                    if rt
+                        .block_on(async {
+                            let mut s = sender.lock().await;
+                            s.send(Message::Text(json)).await
+                        })
+                        .is_err()
+                    {
                         tracing::warn!("WebSocket closed, stopping Gemini PTY output");
                         break;
                     }
@@ -253,9 +262,7 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
 
         loop {
             // Receive from WebSocket in async context
-            let msg_opt = rt.block_on(async {
-                ws_receiver.next().await
-            });
+            let msg_opt = rt.block_on(async { ws_receiver.next().await });
 
             match msg_opt {
                 Some(Ok(Message::Text(text))) => {
@@ -301,30 +308,13 @@ async fn gemini_terminal_connection(socket: WebSocket, session_id: String, state
         tracing::info!("Gemini PTY input task ended");
     });
 
-    // Task to handle command approvals and execute on SSH terminal
-    let session_clone = session.clone();
-    let mut cmd_task = tokio::spawn(async move {
-        while let Some(command) = cmd_rx.recv().await {
-            // Add to pending commands
-            let cmd_id = session_clone.add_pending_command(command.clone()).await;
-
-            tracing::info!("Command pending approval: {} (ID: {})", command, cmd_id);
-        }
-    });
-
     // Wait for tasks to complete
     tokio::select! {
         _ = &mut output_task => {
             input_task.abort();
-            cmd_task.abort();
         }
         _ = &mut input_task => {
             output_task.abort();
-            cmd_task.abort();
-        }
-        _ = &mut cmd_task => {
-            output_task.abort();
-            input_task.abort();
         }
     };
 }
@@ -434,6 +424,10 @@ async fn ssh_terminal_connection(socket: WebSocket, session_id: String, state: A
 }
 
 /// Handle command approval WebSocket
+///
+/// This WebSocket receives approval events via broadcast and forwards them
+/// to the frontend. The frontend sends back decisions which are submitted
+/// to the ApprovalChannel.
 pub async fn command_approval_ws_handler(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
@@ -461,50 +455,68 @@ async fn command_approval_connection(socket: WebSocket, session_id: String, stat
 
     let (mut sender, mut receiver) = socket.split();
 
-    // Monitor pending commands and send to WebSocket
-    let session_clone = session.clone();
-    let mut monitor_task = tokio::spawn(async move {
-        loop {
-            let pending = session_clone.pending_commands.lock().await;
-            for cmd in pending.iter() {
-                if !cmd.approved {
-                    let msg = CommandMessage::CommandRequest {
-                        command: cmd.command.clone(),
-                        command_id: cmd.id.to_string(),
-                    };
-                    let json = serde_json::to_string(&msg).unwrap();
-                    let _ = sender.send(Message::Text(json)).await;
+    // Subscribe to approval events from the broadcast channel
+    let approval_channel = session.get_approval_channel();
+    let event_receiver = approval_channel.subscribe();
+    let event_stream = BroadcastStream::new(event_receiver);
+
+    // Task to forward approval events to WebSocket
+    let mut event_task = tokio::spawn(async move {
+        tokio::pin!(event_stream);
+
+        while let Some(result) = event_stream.next().await {
+            if let Ok(event) = result {
+                let msg = match event {
+                    ApprovalEvent::CommandRequested {
+                        approval_id,
+                        command,
+                    } => CommandMessage::CommandRequested {
+                        approval_id,
+                        command,
+                    },
+                    ApprovalEvent::CommandApproved { approval_id } => {
+                        CommandMessage::CommandApproved { approval_id }
+                    }
+                    ApprovalEvent::CommandRejected { approval_id } => {
+                        CommandMessage::CommandRejected { approval_id }
+                    }
+                };
+
+                let json = serde_json::to_string(&msg).unwrap();
+                if sender.send(Message::Text(json)).await.is_err() {
+                    tracing::warn!("WebSocket closed, stopping approval event forwarding");
+                    break;
                 }
             }
-            drop(pending);
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
     });
 
-    // Handle command approvals
+    // Task to handle decisions from frontend
+    let approval_channel = session.get_approval_channel();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let Message::Text(text) = msg {
                 if let Ok(cmd_msg) = serde_json::from_str::<CommandMessage>(&text) {
-                    match cmd_msg {
-                        CommandMessage::CommandApproval {
-                            command_id,
-                            approved,
-                        } => {
-                            if approved {
-                                let cmd_uuid = Uuid::parse_str(&command_id).unwrap();
-                                if let Some(command) = session.approve_command(cmd_uuid).await {
-                                    // Execute on SSH terminal
-                                    if let Some(ssh) = &session.ssh_session {
-                                        let mut ssh_guard = ssh.lock().await;
-                                        if let Err(e) = ssh_guard.execute_command(command).await {
-                                            tracing::error!("Error executing approved command: {}", e);
-                                        }
-                                    }
-                                }
+                    if let CommandMessage::CommandDecision {
+                        approval_id,
+                        approved,
+                    } = cmd_msg
+                    {
+                        if let Ok(id) = Uuid::parse_str(&approval_id) {
+                            let delivered = approval_channel.submit_decision(id, approved).await;
+                            if delivered {
+                                tracing::info!(
+                                    "Approval decision delivered: {} = {}",
+                                    approval_id,
+                                    approved
+                                );
+                            } else {
+                                tracing::warn!(
+                                    "Approval decision not found (may have timed out): {}",
+                                    approval_id
+                                );
                             }
                         }
-                        _ => {}
                     }
                 }
             }
@@ -512,7 +524,7 @@ async fn command_approval_connection(socket: WebSocket, session_id: String, stat
     });
 
     tokio::select! {
-        _ = &mut monitor_task => recv_task.abort(),
-        _ = &mut recv_task => monitor_task.abort(),
+        _ = &mut event_task => recv_task.abort(),
+        _ = &mut recv_task => event_task.abort(),
     };
 }
