@@ -100,10 +100,30 @@ pub struct SshReadOutputParams {
     /// Number of recent output lines to retrieve (default: 50).
     #[serde(default = "default_lines")]
     pub lines: usize,
+    /// Whether to strip ANSI escape codes from output (default: true).
+    #[serde(default = "default_strip_ansi")]
+    pub strip_ansi: bool,
+    /// Output format: "plain" for raw text, "structured" for JSON with metadata (default: "plain").
+    #[serde(default = "default_format")]
+    pub format: String,
 }
 
 fn default_lines() -> usize {
     50
+}
+
+fn default_strip_ansi() -> bool {
+    true
+}
+
+fn default_format() -> String {
+    "plain".to_string()
+}
+
+/// Strip ANSI escape codes from text
+fn strip_ansi_codes(text: &str) -> String {
+    let ansi_regex = regex::Regex::new(r"\x1B\[[0-9;]*[a-zA-Z]|\x1B\][^\x07]*\x07").unwrap();
+    ansi_regex.replace_all(text, "").replace('\r', "")
 }
 
 // ============================================================================
@@ -175,13 +195,20 @@ impl McpSshService {
             },
             Tool {
                 name: "ssh_read_output".into(),
-                description: Some("Read recent output from the SSH terminal session.".into()),
+                description: Some(
+                    "Read recent output from the SSH terminal session. Use this to understand \
+                     what's currently visible in the SSH terminal, analyze error messages, \
+                     or get context about command results. This is the primary tool for \
+                     SSH context awareness - call it when the user asks about terminal output, \
+                     errors, or when you need to understand the current state of the SSH session."
+                        .into(),
+                ),
                 input_schema: schema_to_arc_map::<SshReadOutputParams>(),
                 annotations: None,
                 output_schema: None,
                 meta: None,
                 icons: None,
-                title: None,
+                title: Some("SSH Read Terminal Output (Context Awareness)".into()),
             },
         ]
     }
@@ -350,9 +377,51 @@ impl McpSshService {
         let output = state.get_recent_output(params.lines).await;
 
         if output.is_empty() {
-            CallToolResult::success(vec![Content::text("No recent output available.")])
+            CallToolResult::success(vec![Content::text(
+                "No recent SSH terminal output available. The SSH session may not have \
+                 produced any output yet, or the buffer is empty.",
+            )])
         } else {
-            CallToolResult::success(vec![Content::text(output.join(""))])
+            let raw_output = output.join("");
+
+            // Process output based on strip_ansi parameter
+            let processed_output = if params.strip_ansi {
+                strip_ansi_codes(&raw_output)
+            } else {
+                raw_output.clone()
+            };
+
+            // Format output based on format parameter
+            match params.format.as_str() {
+                "structured" => {
+                    // Return structured JSON with metadata
+                    let lines: Vec<&str> = processed_output.lines().collect();
+                    let structured = json!({
+                        "total_buffer_entries": output.len(),
+                        "line_count": lines.len(),
+                        "output": processed_output,
+                        "lines": lines,
+                        "contains_error": processed_output.to_lowercase().contains("error")
+                            || processed_output.to_lowercase().contains("failed")
+                            || processed_output.to_lowercase().contains("denied")
+                            || processed_output.to_lowercase().contains("not found"),
+                    });
+                    CallToolResult::success(vec![Content::text(
+                        serde_json::to_string_pretty(&structured).unwrap_or(processed_output),
+                    )])
+                }
+                _ => {
+                    // Plain text output with header
+                    let header = format!(
+                        "=== SSH Terminal Output ({} lines) ===\n\n",
+                        processed_output.lines().count()
+                    );
+                    CallToolResult::success(vec![Content::text(format!(
+                        "{}{}",
+                        header, processed_output
+                    ))])
+                }
+            }
         }
     }
 

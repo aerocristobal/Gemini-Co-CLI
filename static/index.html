@@ -19,7 +19,17 @@
             <div class="pane gemini-pane">
                 <div class="pane-header">
                     <h2>Gemini CLI Terminal</h2>
-                    <span id="gemini-status" class="status-badge disconnected">Not Connected</span>
+                    <div class="header-controls">
+                        <div id="ssh-context-indicator" class="context-indicator" title="SSH context will be included automatically when asking about terminal output">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="ssh-context-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="context-label">SSH Context</span>
+                            <span id="context-status" class="context-status"></span>
+                        </div>
+                        <span id="gemini-status" class="status-badge disconnected">Not Connected</span>
+                    </div>
                 </div>
                 <div class="pane-content">
                     <div id="gemini-terminal"></div>
@@ -57,6 +67,16 @@
                     <h2>SSH Terminal</h2>
                 </div>
                 <div class="pane-content">
+                    <!-- Suggested Commands Panel -->
+                    <div id="suggestions-panel" class="suggestions-panel" style="display: none;">
+                        <div class="suggestions-header">
+                            <span class="suggestions-title">Suggested Commands</span>
+                            <button class="clear-suggestions-btn" onclick="clearAllSuggestions()" title="Clear all">Clear All</button>
+                        </div>
+                        <div id="suggestions-container" class="suggestions-container">
+                            <!-- Command cards will be inserted here -->
+                        </div>
+                    </div>
                     <div id="ssh-terminal"></div>
 
                     <!-- SSH Connection Form (shown initially) -->

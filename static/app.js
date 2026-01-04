@@ -11,10 +11,407 @@ let pendingCommand = null;
 let sshConnected = false;
 let geminiConnected = false;
 
+// SSH Context Awareness - Output Buffer
+const SSH_BUFFER_MAX_ENTRIES = 100;
+const SSH_BUFFER_MAX_CHARS = 50000; // Maximum total characters to keep
+let sshOutputBuffer = [];
+let sshContextEnabled = true; // Toggle for automatic context inclusion
+let currentInputBuffer = ''; // Track current user input for context detection
+
+// System prompt for Gemini - establishes context and rules
+const SYSTEM_PROMPT = `You are an expert DevOps and Systems Administration AI assistant embedded in a web-based terminal application.
+
+YOUR ENVIRONMENT:
+1. You exist within a web browser interface on the user's local machine.
+2. The user is viewing a split-screen layout:
+   - LEFT PANE: Your chat interface (Gemini).
+   - RIGHT PANE: A live SSH session connected to a completely separate remote server.
+
+YOUR CAPABILITIES:
+1. CONTEXT AWARENESS: You are provided with the text buffer (logs, standard output, standard error) from the user's SSH terminal. You must use this context to answer questions, diagnose errors, and summarize system state.
+2. COMMAND SUGGESTION: You can suggest shell commands to the user. The user interface allows the user to execute these commands with a single click after reviewing them.
+
+YOUR CONSTRAINTS & RULES:
+1. SYSTEM SEPARATION (CRITICAL):
+   - You do NOT have direct access to the remote server's filesystem or kernel. You are an observer in the browser.
+   - You cannot "read a file" on the server unless the user \`cat\`s it to the terminal output first.
+   - You cannot "fix" a bug on the server directly; you can only provide the command for the user to fix it.
+   - If the user asks you to "save a file," clarify if they mean downloading it to their local machine (browser action) or creating a file on the remote server (requires a command like \`echo "content" > file.txt\`).
+
+2. COMMAND SAFETY & FORMATTING:
+   - When you suggest a command to be executed in the SSH session, you MUST format it inside a Markdown code block with \`\`\`bash or \`\`\`sh.
+   - NEVER suggest destructive commands (like \`rm -rf /\` or formatting disks) without an extreme warning and explicit confirmation request.
+   - If a command requires root privileges, verify if the user is root (look for \`#\` in the prompt) or prepend \`sudo\`.
+
+3. RESPONSE STYLE:
+   - Be concise. Terminal users value brevity.
+   - Do not repeat the terminal output back to the user unless analyzing a specific line for an error.
+   - Focus on "Actionable Advice."
+
+Please confirm you understand these constraints by responding briefly.`;
+
+// Command suggestion tracking
+let suggestedCommands = []; // Track detected commands from Gemini output
+let geminiOutputBuffer = ''; // Buffer Gemini output for code block detection
+let systemPromptSent = false; // Track if system prompt has been sent
+
+// Context detection patterns - keywords that suggest user is asking about SSH output
+const CONTEXT_TRIGGER_PATTERNS = [
+    /what (does|is) (this|that|the) (error|output|result|message)/i,
+    /explain (this|that|the) (error|output|result|message)/i,
+    /what('s| is) (wrong|happening|going on)/i,
+    /why (did|does|is) (this|that|it)/i,
+    /summarize (the )?(files|output|results|logs)/i,
+    /what (files|commands|errors)/i,
+    /help (me )?(understand|fix|debug)/i,
+    /can you (see|read|analyze) (the|this|my)/i,
+    /look at (the|this|my) (output|terminal|error|log)/i,
+    /(fix|debug|solve|resolve) (this|that|the|it)/i,
+    /what (happened|went wrong)/i,
+    /^(this|that) (error|output|command)/i,
+    /analyze (the|this|my)/i,
+];
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initializeApp();
 });
+
+// ============================================================================
+// SSH Context Awareness Functions
+// ============================================================================
+
+/**
+ * Add SSH output to the local buffer with timestamp
+ */
+function addSshOutputToBuffer(output) {
+    const entry = {
+        timestamp: Date.now(),
+        data: output,
+        // Strip ANSI codes for analysis (keep original for display context)
+        plainText: stripAnsiCodes(output),
+    };
+
+    sshOutputBuffer.push(entry);
+
+    // Trim buffer if too many entries
+    while (sshOutputBuffer.length > SSH_BUFFER_MAX_ENTRIES) {
+        sshOutputBuffer.shift();
+    }
+
+    // Also trim by total character count
+    let totalChars = sshOutputBuffer.reduce((sum, e) => sum + e.data.length, 0);
+    while (totalChars > SSH_BUFFER_MAX_CHARS && sshOutputBuffer.length > 1) {
+        const removed = sshOutputBuffer.shift();
+        totalChars -= removed.data.length;
+    }
+}
+
+/**
+ * Strip ANSI escape codes from text
+ */
+function stripAnsiCodes(text) {
+    // eslint-disable-next-line no-control-regex
+    return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
+               .replace(/\x1B\][^\x07]*\x07/g, '')  // OSC sequences
+               .replace(/\r/g, '');  // Carriage returns
+}
+
+/**
+ * Get recent SSH output as formatted context string
+ */
+function getSshContext(maxLines = 50, maxChars = 10000) {
+    if (sshOutputBuffer.length === 0) {
+        return null;
+    }
+
+    let context = '';
+    let lineCount = 0;
+
+    // Build context from most recent entries
+    for (let i = sshOutputBuffer.length - 1; i >= 0 && lineCount < maxLines; i--) {
+        const entry = sshOutputBuffer[i];
+        const lines = entry.plainText.split('\n');
+
+        for (let j = lines.length - 1; j >= 0 && lineCount < maxLines; j--) {
+            const line = lines[j].trim();
+            if (line) {
+                context = line + '\n' + context;
+                lineCount++;
+            }
+        }
+
+        if (context.length > maxChars) {
+            context = context.substring(context.length - maxChars);
+            break;
+        }
+    }
+
+    return context.trim() || null;
+}
+
+/**
+ * Check if user input suggests they want SSH context
+ */
+function shouldIncludeSshContext(input) {
+    if (!sshConnected || sshOutputBuffer.length === 0) {
+        return false;
+    }
+
+    if (!sshContextEnabled) {
+        return false;
+    }
+
+    const trimmedInput = input.trim();
+
+    // Check against context trigger patterns
+    for (const pattern of CONTEXT_TRIGGER_PATTERNS) {
+        if (pattern.test(trimmedInput)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Format SSH context for injection into prompt
+ */
+function formatSshContextForPrompt(context) {
+    return `\n[SSH Terminal Context - Recent Output]\n\`\`\`\n${context}\n\`\`\`\n\n`;
+}
+
+/**
+ * Clear SSH output buffer (useful for fresh start)
+ */
+function clearSshBuffer() {
+    sshOutputBuffer = [];
+    console.log('SSH output buffer cleared');
+}
+
+// ============================================================================
+// Command Suggestion Detection & Execution
+// ============================================================================
+
+/**
+ * Detect code blocks in Gemini output and extract commands
+ */
+function detectCodeBlocks(text) {
+    // Match markdown code blocks: ```bash, ```sh, ```shell, or just ```
+    const codeBlockRegex = /```(?:bash|sh|shell|zsh)?\s*\n([\s\S]*?)```/g;
+    const commands = [];
+    let match;
+
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+        const command = match[1].trim();
+        if (command && !commands.includes(command)) {
+            commands.push(command);
+        }
+    }
+
+    return commands;
+}
+
+/**
+ * Add a suggested command to the panel
+ */
+function addSuggestedCommand(command) {
+    // Avoid duplicates
+    if (suggestedCommands.some(c => c.command === command)) {
+        return;
+    }
+
+    const suggestion = {
+        id: Date.now() + Math.random().toString(36).substr(2, 9),
+        command: command,
+        timestamp: Date.now(),
+    };
+
+    suggestedCommands.push(suggestion);
+
+    // Keep only last 10 suggestions
+    if (suggestedCommands.length > 10) {
+        suggestedCommands.shift();
+    }
+
+    updateSuggestionsPanel();
+}
+
+/**
+ * Update the suggestions panel UI
+ */
+function updateSuggestionsPanel() {
+    const panel = document.getElementById('suggestions-panel');
+    const container = document.getElementById('suggestions-container');
+
+    if (!panel || !container) return;
+
+    if (suggestedCommands.length === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+
+    panel.style.display = 'block';
+    container.innerHTML = '';
+
+    suggestedCommands.forEach((suggestion, index) => {
+        const card = document.createElement('div');
+        card.className = 'command-card';
+        card.innerHTML = `
+            <div class="command-text">
+                <code>${escapeHtml(suggestion.command)}</code>
+            </div>
+            <div class="command-actions">
+                <button class="cmd-btn cmd-run" title="Execute in SSH terminal" onclick="runCommand('${suggestion.id}')">
+                    <span class="btn-icon">▶</span> Run
+                </button>
+                <button class="cmd-btn cmd-edit" title="Paste to SSH terminal for editing" onclick="editCommand('${suggestion.id}')">
+                    <span class="btn-icon">✎</span> Edit
+                </button>
+                <button class="cmd-btn cmd-copy" title="Copy to clipboard" onclick="copyCommand('${suggestion.id}')">
+                    <span class="btn-icon">⧉</span> Copy
+                </button>
+                <button class="cmd-btn cmd-dismiss" title="Dismiss" onclick="dismissCommand('${suggestion.id}')">
+                    ✕
+                </button>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Run a suggested command in the SSH terminal
+ */
+function runCommand(id) {
+    const suggestion = suggestedCommands.find(s => s.id === id);
+    if (!suggestion) return;
+
+    if (!sshConnected || !sshTerminalWs || sshTerminalWs.readyState !== WebSocket.OPEN) {
+        showSSHError('SSH not connected. Connect to SSH first to run commands.');
+        return;
+    }
+
+    // Send command to SSH terminal with newline to execute
+    sshTerminalWs.send(JSON.stringify({
+        type: 'input',
+        data: suggestion.command + '\n',
+    }));
+
+    // Show feedback in Gemini terminal
+    geminiTerminal.write(`\r\n\x1b[32m✓ Executed: ${suggestion.command}\x1b[0m\r\n`);
+
+    // Focus SSH terminal to see output
+    sshTerminal.focus();
+
+    // Remove from suggestions after running
+    dismissCommand(id);
+}
+
+/**
+ * Paste command to SSH terminal for editing (without executing)
+ */
+function editCommand(id) {
+    const suggestion = suggestedCommands.find(s => s.id === id);
+    if (!suggestion) return;
+
+    if (!sshConnected || !sshTerminalWs || sshTerminalWs.readyState !== WebSocket.OPEN) {
+        showSSHError('SSH not connected. Connect to SSH first.');
+        return;
+    }
+
+    // Send command to SSH terminal WITHOUT newline (user can edit)
+    sshTerminalWs.send(JSON.stringify({
+        type: 'input',
+        data: suggestion.command,
+    }));
+
+    // Show feedback
+    geminiTerminal.write(`\r\n\x1b[33m✎ Pasted for editing: ${suggestion.command}\x1b[0m\r\n`);
+
+    // Focus SSH terminal for editing
+    sshTerminal.focus();
+}
+
+/**
+ * Copy command to clipboard
+ */
+function copyCommand(id) {
+    const suggestion = suggestedCommands.find(s => s.id === id);
+    if (!suggestion) return;
+
+    navigator.clipboard.writeText(suggestion.command).then(() => {
+        geminiTerminal.write(`\r\n\x1b[36m⧉ Copied to clipboard: ${suggestion.command}\x1b[0m\r\n`);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+    });
+}
+
+/**
+ * Dismiss a suggested command
+ */
+function dismissCommand(id) {
+    suggestedCommands = suggestedCommands.filter(s => s.id !== id);
+    updateSuggestionsPanel();
+}
+
+/**
+ * Clear all suggested commands
+ */
+function clearAllSuggestions() {
+    suggestedCommands = [];
+    updateSuggestionsPanel();
+}
+
+/**
+ * Process Gemini output to detect commands
+ */
+function processGeminiOutput(output) {
+    // Add to buffer
+    geminiOutputBuffer += output;
+
+    // Look for complete code blocks
+    const commands = detectCodeBlocks(geminiOutputBuffer);
+
+    // Add any new commands found
+    commands.forEach(cmd => {
+        addSuggestedCommand(cmd);
+    });
+
+    // Keep buffer manageable (last 10000 chars)
+    if (geminiOutputBuffer.length > 10000) {
+        geminiOutputBuffer = geminiOutputBuffer.slice(-5000);
+    }
+}
+
+/**
+ * Send system prompt to Gemini when ready
+ */
+function sendSystemPrompt() {
+    if (systemPromptSent) return;
+
+    // Wait a bit for Gemini CLI to be ready
+    setTimeout(() => {
+        if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
+            // Send the system prompt
+            geminiTerminalWs.send(JSON.stringify({
+                type: 'input',
+                data: SYSTEM_PROMPT + '\n',
+            }));
+            systemPromptSent = true;
+            console.log('System prompt sent to Gemini');
+        }
+    }, 2000); // Wait 2 seconds for CLI to initialize
+}
 
 // Initialize the main application - show auth forms first
 async function initializeApp() {
@@ -30,9 +427,54 @@ async function initializeApp() {
 
         // Setup resizer
         setupResizer();
+
+        // Setup SSH context toggle
+        setupSshContextToggle();
     } catch (error) {
         console.error('Failed to initialize app:', error);
         alert('Failed to initialize application: ' + error.message);
+    }
+}
+
+/**
+ * Setup the SSH context toggle and status indicator
+ */
+function setupSshContextToggle() {
+    const toggle = document.getElementById('ssh-context-toggle');
+    const statusElement = document.getElementById('context-status');
+
+    if (toggle) {
+        toggle.addEventListener('change', (e) => {
+            sshContextEnabled = e.target.checked;
+            console.log('SSH context auto-injection:', sshContextEnabled ? 'enabled' : 'disabled');
+            updateContextStatus();
+        });
+    }
+
+    // Update status periodically
+    setInterval(updateContextStatus, 2000);
+    updateContextStatus();
+}
+
+/**
+ * Update the SSH context status indicator
+ */
+function updateContextStatus() {
+    const statusElement = document.getElementById('context-status');
+    if (!statusElement) return;
+
+    if (!sshConnected) {
+        statusElement.textContent = '';
+        statusElement.className = 'context-status';
+    } else if (sshOutputBuffer.length > 0) {
+        const lineCount = sshOutputBuffer.reduce((sum, e) => {
+            return sum + (e.plainText.match(/\n/g) || []).length + 1;
+        }, 0);
+        statusElement.textContent = `${lineCount} lines`;
+        statusElement.className = 'context-status available';
+    } else {
+        statusElement.textContent = 'empty';
+        statusElement.className = 'context-status empty';
     }
 }
 
@@ -166,13 +608,65 @@ function setupTerminals() {
             geminiTerminal.focus();
         }, 100);
 
-        // Handle Gemini terminal input
+        // Handle Gemini terminal input with SSH context awareness
         geminiTerminal.onData((data) => {
             if (geminiTerminalWs && geminiTerminalWs.readyState === WebSocket.OPEN) {
-                geminiTerminalWs.send(JSON.stringify({
-                    type: 'input',
-                    data: data,
-                }));
+                // Track input buffer for context detection
+                if (data === '\r' || data === '\n') {
+                    // User pressed Enter - check if we should inject SSH context
+                    const inputToCheck = currentInputBuffer.trim();
+
+                    if (inputToCheck && shouldIncludeSshContext(inputToCheck)) {
+                        const context = getSshContext();
+                        if (context) {
+                            // Inject SSH context before the user's prompt
+                            const contextPrefix = formatSshContextForPrompt(context);
+
+                            // Show context injection indicator in Gemini terminal
+                            geminiTerminal.write('\r\n\x1b[36m[SSH context included automatically]\x1b[0m\r\n');
+
+                            // Send context first, then the original prompt
+                            geminiTerminalWs.send(JSON.stringify({
+                                type: 'input',
+                                data: contextPrefix + currentInputBuffer + '\r',
+                            }));
+
+                            // Clear input buffer after sending
+                            currentInputBuffer = '';
+                            return; // Don't send the Enter separately
+                        }
+                    }
+
+                    // Clear input buffer on Enter (context wasn't needed)
+                    currentInputBuffer = '';
+
+                    // Send the Enter normally
+                    geminiTerminalWs.send(JSON.stringify({
+                        type: 'input',
+                        data: data,
+                    }));
+                } else if (data === '\x7f' || data === '\b') {
+                    // Backspace - remove last character from buffer
+                    currentInputBuffer = currentInputBuffer.slice(0, -1);
+                    geminiTerminalWs.send(JSON.stringify({
+                        type: 'input',
+                        data: data,
+                    }));
+                } else if (data === '\x03') {
+                    // Ctrl+C - clear buffer
+                    currentInputBuffer = '';
+                    geminiTerminalWs.send(JSON.stringify({
+                        type: 'input',
+                        data: data,
+                    }));
+                } else {
+                    // Regular character - add to buffer
+                    currentInputBuffer += data;
+                    geminiTerminalWs.send(JSON.stringify({
+                        type: 'input',
+                        data: data,
+                    }));
+                }
             }
         });
 
@@ -284,12 +778,17 @@ function connectGeminiWebSocket() {
             }));
             console.log('Sent initial Gemini terminal size:', geminiTerminal.cols, 'x', geminiTerminal.rows);
         }
+
+        // Send system prompt to establish context
+        sendSystemPrompt();
     };
 
     geminiTerminalWs.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'output') {
             geminiTerminal.write(message.data);
+            // Process output for command detection
+            processGeminiOutput(message.data);
         } else if (message.type === 'error') {
             geminiTerminal.write(`\x1b[31mError: ${message.message}\x1b[0m\r\n`);
         }
@@ -306,6 +805,9 @@ function connectGeminiWebSocket() {
         geminiTerminal.write('\x1b[33m✗ Connection closed\x1b[0m\r\n');
         // Show auth form again for reconnection
         document.getElementById('gemini-auth-form').style.display = 'flex';
+        // Reset state for reconnection
+        systemPromptSent = false;
+        geminiOutputBuffer = '';
     };
 
     // Connect command approval WebSocket
@@ -426,8 +928,12 @@ function connectSSHWebSocket() {
         const message = JSON.parse(event.data);
         if (message.type === 'output') {
             sshTerminal.write(message.data);
+            // Add to SSH context buffer for Gemini awareness
+            addSshOutputToBuffer(message.data);
         } else if (message.type === 'error') {
             sshTerminal.write(`\x1b[31mError: ${message.message}\x1b[0m\r\n`);
+            // Also capture errors for context
+            addSshOutputToBuffer(`Error: ${message.message}`);
         }
     };
 

@@ -40,6 +40,9 @@ dotenvy = "0.15"
 # UUID for session management
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
+# Regex for ANSI code stripping
+regex = "1"
+
 # PTY for proper terminal emulation
 portable-pty = "0.8"
 

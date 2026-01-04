@@ -422,3 +422,285 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #444;
 }
+
+/* SSH Context Awareness Toggle & Indicator */
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.context-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+
+.context-label {
+    color: #888;
+    white-space: nowrap;
+}
+
+.context-status {
+    display: inline-block;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.context-status.available {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+}
+
+.context-status.empty {
+    background: rgba(136, 136, 136, 0.2);
+    color: #888;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #333;
+    transition: 0.3s;
+    border-radius: 18px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 12px;
+    width: 12px;
+    left: 3px;
+    bottom: 3px;
+    background-color: #888;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: rgba(74, 222, 128, 0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    background-color: #4ade80;
+    transform: translateX(14px);
+}
+
+.toggle-switch input:focus + .toggle-slider {
+    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.3);
+}
+
+/* ============================================================================
+   Suggested Commands Panel
+   ============================================================================ */
+
+.suggestions-panel {
+    background: linear-gradient(to bottom, #1a2e1a, #0f1f0f);
+    border-bottom: 2px solid #4ade80;
+    padding: 0.75rem;
+    max-height: 200px;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.suggestions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(74, 222, 128, 0.2);
+}
+
+.suggestions-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #4ade80;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.clear-suggestions-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #888;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.625rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.clear-suggestions-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.suggestions-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* Command Card */
+.command-card {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    transition: all 0.2s;
+}
+
+.command-card:hover {
+    background: rgba(0, 0, 0, 0.6);
+    border-color: #4ade80;
+    box-shadow: 0 2px 8px rgba(74, 222, 128, 0.15);
+}
+
+.command-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.command-text code {
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8125rem;
+    color: #e8e8e8;
+    background: transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+.command-actions {
+    display: flex;
+    gap: 0.375rem;
+    flex-shrink: 0;
+}
+
+/* Command Action Buttons */
+.cmd-btn {
+    padding: 0.375rem 0.625rem;
+    border-radius: 4px;
+    border: none;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.cmd-btn .btn-icon {
+    font-size: 0.75rem;
+}
+
+/* Run Button - Primary action */
+.cmd-run {
+    background: #4ade80;
+    color: #0f0f0f;
+}
+
+.cmd-run:hover {
+    background: #22c55e;
+    box-shadow: 0 2px 8px rgba(74, 222, 128, 0.4);
+}
+
+/* Edit Button - Secondary action */
+.cmd-edit {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.cmd-edit:hover {
+    background: rgba(251, 191, 36, 0.3);
+    border-color: #fbbf24;
+}
+
+/* Copy Button - Tertiary action */
+.cmd-copy {
+    background: rgba(96, 165, 250, 0.2);
+    color: #60a5fa;
+    border: 1px solid rgba(96, 165, 250, 0.3);
+}
+
+.cmd-copy:hover {
+    background: rgba(96, 165, 250, 0.3);
+    border-color: #60a5fa;
+}
+
+/* Dismiss Button */
+.cmd-dismiss {
+    background: transparent;
+    color: #666;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+.cmd-dismiss:hover {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+}
+
+/* Animation for new command cards */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.command-card {
+    animation: slideIn 0.2s ease-out;
+}
+
+/* Responsive adjustments for narrow panes */
+@media (max-width: 600px) {
+    .command-actions {
+        flex-wrap: wrap;
+    }
+
+    .cmd-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.625rem;
+    }
+}

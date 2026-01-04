@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::Response,
     Json,
@@ -576,4 +576,116 @@ async fn command_approval_connection(socket: WebSocket, session_id: String, stat
         _ = &mut event_task => recv_task.abort(),
         _ = &mut recv_task => event_task.abort(),
     };
+}
+
+// ============================================================================
+// SSH Context Awareness API
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SshContextQuery {
+    /// Maximum number of lines to return (default: 50)
+    #[serde(default = "default_lines")]
+    pub lines: usize,
+    /// Whether to strip ANSI codes (default: true)
+    #[serde(default = "default_strip_ansi")]
+    pub strip_ansi: bool,
+}
+
+fn default_lines() -> usize {
+    50
+}
+
+fn default_strip_ansi() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+pub struct SshContextResponse {
+    pub success: bool,
+    pub connected: bool,
+    pub context: Option<String>,
+    pub line_count: usize,
+    pub total_entries: usize,
+}
+
+/// Strip ANSI escape codes from text
+fn strip_ansi_codes(text: &str) -> String {
+    // Match ANSI escape sequences
+    let ansi_regex = regex::Regex::new(r"\x1B\[[0-9;]*[a-zA-Z]|\x1B\][^\x07]*\x07").unwrap();
+    ansi_regex.replace_all(text, "").replace('\r', "")
+}
+
+/// Handle SSH context retrieval request
+///
+/// Returns recent SSH terminal output for context-aware AI interactions.
+/// This endpoint provides the SSH output buffer contents which can be used
+/// to give Gemini context about what's happening in the SSH terminal.
+pub async fn ssh_context_handler(
+    Path(session_id): Path<String>,
+    Query(query): Query<SshContextQuery>,
+    State(state): State<AppState>,
+) -> Json<SshContextResponse> {
+    let session_uuid = match uuid::Uuid::parse_str(&session_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Json(SshContextResponse {
+                success: false,
+                connected: false,
+                context: None,
+                line_count: 0,
+                total_entries: 0,
+            });
+        }
+    };
+
+    let session = match state.get_session(session_uuid).await {
+        Some(s) => s,
+        None => {
+            return Json(SshContextResponse {
+                success: false,
+                connected: false,
+                context: None,
+                line_count: 0,
+                total_entries: 0,
+            });
+        }
+    };
+
+    let is_connected = session.ssh_session.is_some();
+    let buffer = session.get_ssh_context().await;
+    let total_entries = buffer.len();
+
+    if buffer.is_empty() {
+        return Json(SshContextResponse {
+            success: true,
+            connected: is_connected,
+            context: None,
+            line_count: 0,
+            total_entries,
+        });
+    }
+
+    // Join buffer entries and get recent lines
+    let all_output = buffer.join("");
+    let lines: Vec<&str> = all_output.lines().collect();
+    let start_idx = lines.len().saturating_sub(query.lines);
+    let recent_lines: Vec<&str> = lines[start_idx..].to_vec();
+
+    let context = recent_lines.join("\n");
+    let line_count = recent_lines.len();
+
+    let final_context = if query.strip_ansi {
+        strip_ansi_codes(&context)
+    } else {
+        context
+    };
+
+    Json(SshContextResponse {
+        success: true,
+        connected: is_connected,
+        context: Some(final_context),
+        line_count,
+        total_entries,
+    })
 }

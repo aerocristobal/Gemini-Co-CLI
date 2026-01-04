@@ -41,6 +41,10 @@ async fn main() {
         )
         .route("/api/ssh/connect", post(websocket::ssh_connect_handler))
         .route(
+            "/api/ssh/context/:session_id",
+            get(websocket::ssh_context_handler),
+        )
+        .route(
             "/ws/gemini-terminal/:session_id",
             get(websocket::gemini_terminal_ws_handler),
         )
